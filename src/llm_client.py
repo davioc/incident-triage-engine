@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from src.schema import IncidentReport, LogAnomaly, SeverityLevel
 
-logger = logging.getLogger("ai-log-analyzer.llm")
+logger = logging.getLogger("incident-triage-engine.llm")
 
 # Provider-side availability problems: safe to degrade. Schema problems are not.
 TRANSPORT_ERRORS = (APIConnectionError, APITimeoutError, APIStatusError, OSError)

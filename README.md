@@ -1,7 +1,10 @@
-# 🛠️ AI Log Analyzer & Triage Engine
+# 🛠️ Incident Triage Engine
 
 > **Status:** Active - In Progress  
-> A modular, high-performance SRE incident triage pipeline and dashboard built with **FastAPI**, **HTMX**, **Tailwind CSS**, and **Pydantic**.
+> A modular, high-performance SRE incident triage pipeline and dashboard: it parses raw
+> log telemetry, retrieves runbook context, and produces schema-validated root-cause
+> reports with escalation alerts, built with **FastAPI**, **HTMX**, **Tailwind CSS**,
+> **ChromaDB**, and **Pydantic**.
 
 ---
 

@@ -1,5 +1,5 @@
 """
-CLI entry point for running the AI Log Analyzer Triage Engine.
+CLI entry point for running the Incident Triage Engine.
 Simulates ingesting raw telemetry data and printing triage reports.
 """
 
@@ -40,7 +40,7 @@ def create_mock_analyzer():
 
 def main():
     print("=" * 60)
-    print(" AI LOG ANALYZER — INCIDENT TRIAGE ENGINE ")
+    print(" INCIDENT TRIAGE ENGINE — LOG RCA PIPELINE ")
     print("=" * 60)
 
     print("\n[1/3] Generating 500 telemetry log lines...")

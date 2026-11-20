@@ -1,7 +1,7 @@
 """
 HTTP layer for the triage service: the canonical /api/v1 contract plus HTMX
-fragment rendering for the dashboard. Both app objects (src/api.py for the API,
-src/main.py for the dashboard) mount this router, so there is exactly one
+fragment rendering for the dashboard. Both app objects (src/api/__init__.py for the
+API, src/main.py for the dashboard) mount this router, so there is exactly one
 implementation of each endpoint.
 """
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 from src.engine import IncidentTriageEngine
 from src.schema import IncidentReport
 
-logger = logging.getLogger("ai-log-analyzer.api")
+logger = logging.getLogger("incident-triage-engine.api")
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ async def health_check() -> Dict[str, str]:
     """Health check endpoint for monitoring API and service availability."""
     return {
         "status": "healthy",
-        "service": "ai-log-analyzer-api",
+        "service": "incident-triage-engine",
         "version": "1.0.0",
     }
 

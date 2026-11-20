@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from src.api.routes import engine, router
 
 app = FastAPI(
-    title="AI Log Analyzer & Incident Triage API",
+    title="Incident Triage Engine API",
     description="Automated log parser, context compressor, runbook retrieval and LLM root-cause triage engine.",
     version="1.0.0",
 )

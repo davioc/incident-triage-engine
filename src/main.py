@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 # Standard absolute imports using 'src.'
 from src.api.routes import router as api_router
 
-app = FastAPI(title="SRE Log Triage Engine", version="1.0.0")
+app = FastAPI(title="Incident Triage Engine", version="1.0.0")
 
 # 1. Register API routes from routes.py (includes /api/v1/health)
 app.include_router(api_router)

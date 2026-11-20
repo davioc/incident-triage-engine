@@ -10,7 +10,7 @@ from src.log_parser import parse_log_line
 from src.llm_client import StructuredLogAnalyzer
 from src.schema import IncidentReport, SeverityLevel
 
-logger = logging.getLogger("ai-log-analyzer.engine")
+logger = logging.getLogger("incident-triage-engine.engine")
 
 
 class IncidentTriageEngine:

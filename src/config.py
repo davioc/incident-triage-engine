@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "SRE Log Triage Engine"
+    PROJECT_NAME: str = "Incident Triage Engine"
     TRIAGE_MODE: str = "mock"
 
     # Path configuration anchored to project root
