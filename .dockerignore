@@ -1,0 +1,36 @@
+# Version control and local tooling
+.git/
+.github/
+.gitignore
+.dockerignore
+
+# Python environment and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.benchmarks/
+
+# Secrets: never bake a key into an image layer. Compose passes OPENAI_API_KEY
+# through the environment instead.
+.env
+*.env
+
+# Local agent/editor data
+.continue/
+.continueignore
+.strata/
+.vscode/
+.idea/
+.cursor/
+
+# The ChromaDB index is built inside the container (persisted via a named volume).
+.chroma_db/
+
+# Not needed at runtime
+tests/
+docs/adr/
+docs/images/
+README.md

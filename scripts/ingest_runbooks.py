@@ -1,9 +1,17 @@
 """
-Manual smoke test for the runbook vector store: ingests docs/runbooks/*.md and
-runs similarity queries. Run as `python scripts/test_vector_store.py`.
+Ingest docs/runbooks/*.md into ChromaDB and run similarity queries. The served app
+turns retrieval on, so this is what makes runbook grounding work; the container runs
+it at startup (upsert is idempotent). Run as `python scripts/ingest_runbooks.py`.
 """
 
-from src.vector_store import get_vector_store
+import os
+import sys
+
+# The project root must be importable for 'src.*' to resolve, whether this is run
+# from a shell or as the container's startup command. Imports follow deliberately.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from src.vector_store import get_vector_store  # noqa: E402
 
 TEST_QUERIES = [
     "Database Connection Timeout on pool acquisition",
@@ -29,7 +37,9 @@ def main() -> None:
         results = store.query_runbooks(query, n_results=1)
         if results:
             match = results[0]
-            print(f"Top Match: {match['metadata']['title']} (Source: {match['metadata']['source']})")
+            title = match["metadata"]["title"]
+            source = match["metadata"]["source"]
+            print(f"Top Match: {title} (Source: {source})")
             print(f"Cosine distance (lower = closer): {match['distance']:.4f}")
             print(f"Preview: {match['content'][:150].strip()}...")
         else:

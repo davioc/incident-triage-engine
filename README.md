@@ -70,9 +70,12 @@ src/schema.py         # SeverityLevel, LogAnomaly, IncidentReport (Pydantic v2)
 src/vector_store.py   # ChromaDB runbook index (lazy, created on first use)
 src/web/index.html    # Dashboard UI (HTMX + Tailwind via CDN)
 scripts/incident_cli.py         # CLI: JSON-lines log file -> incident report
-scripts/test_vector_store.py    # CLI: ingest runbooks and probe similarity queries
+scripts/ingest_runbooks.py      # CLI: ingest runbooks and probe similarity queries
 docs/runbooks/*.md    # Remediation runbooks indexed for retrieval
 tests/                # pytest suite (parser, schema, llm client, engine, api, cli)
+Dockerfile            # API + dashboard image (non-root, ONNX model pre-warmed)
+docker-compose.yml    # app + optional Ollama profile + ChromaDB volume
+setup.cfg             # flake8 settings aligned with black's 88-char limit
 ```
 
 ---
@@ -168,7 +171,7 @@ The served app queries ChromaDB for runbooks matching the error messages, which 
 use; ingest it once:
 
 ```bash
-python scripts/test_vector_store.py
+python scripts/ingest_runbooks.py
 ```
 
 The database lives in `.chroma_db/` (created automatically). Tests and `run_triage.py`
@@ -207,3 +210,54 @@ For OpenAI, set `TRIAGE_MODE=openai` and provide `OPENAI_API_KEY`. For Ollama, s
 If a provider call fails at runtime, the engine degrades to heuristic analysis: the
 report is labelled `[DEGRADED]`, `metadata.degraded` carries the reason, and escalation
 is suppressed. Keep `.env` (and any real key) out of version control.
+
+---
+
+## 🐳 Docker
+
+One command runs the whole stack:
+
+```bash
+docker compose up
+```
+
+Then open <http://localhost:8000>. The image is built from `Dockerfile` and:
+
+- installs the pinned dependencies, then copies only `src/`, `scripts/` and
+  `docs/runbooks/` — `.env` is excluded by `.dockerignore`, so no key is baked into a layer;
+- pre-warms ChromaDB's ONNX embedding model during the build, so container start does
+  not download ~80 MB;
+- ingests the runbooks before serving, because the served app turns retrieval on and an
+  empty index would return zero matches (upsert is idempotent, so restarting re-ingests);
+- persists the index in a named volume (`CHROMA_DB_DIR=/app/.chroma_db`) rather than
+  inside the image;
+- runs as a non-root user and reports readiness through `/api/v1/health`.
+
+`TRIAGE_MODE` defaults to `mock`, so the stack needs no API key. To use OpenAI, pass the
+key through the environment instead of editing the image:
+
+```bash
+docker compose up --build -d
+# or with a key resolved from your shell / .env
+$env:TRIAGE_MODE="openai"; $env:OPENAI_API_KEY="sk-..."; docker compose up --build -d
+```
+
+To point the app at a local Ollama (Llama 3.2, no external API), start Ollama and set:
+
+```bash
+$env:TRIAGE_MODE="ollama"; docker compose up -d --force-recreate app
+```
+
+The `ollama` service is defined behind a `llm` profile so the default stack stays small;
+`docker compose --profile llm up -d` pulls and starts it alongside the app. The app reaches
+it over `OLLAMA_BASE_URL=http://ollama:11434/v1`, the container-network address. If Ollama
+is not answering, triage degrades to heuristics rather than failing.
+
+Useful commands:
+
+```bash
+docker compose ps        # status and health
+docker compose logs app  # ingest output + uvicorn logs
+docker compose down      # stop; the volume keeps the index
+docker compose down -v   # stop and delete the index
+```

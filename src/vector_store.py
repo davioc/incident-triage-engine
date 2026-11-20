@@ -1,5 +1,5 @@
 import os
-#from pathlib import Path
+from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 from src.config import settings
@@ -7,11 +7,14 @@ from src.config import settings
 
 class RunbookVectorStore:
     def __init__(self):
+        # Resolve the index directory here rather than at import time, so a container
+        # can redirect it to a mounted volume via CHROMA_DB_DIR.
+        chroma_dir = Path(os.getenv("CHROMA_DB_DIR") or settings.CHROMA_DB_DIR)
         # Create storage directory if it doesn't exist
-        os.makedirs(settings.CHROMA_DB_DIR, exist_ok=True)
+        chroma_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize persistent ChromaDB client
-        self.client = chromadb.PersistentClient(path=str(settings.CHROMA_DB_DIR))
+        self.client = chromadb.PersistentClient(path=str(chroma_dir))
 
         # Use default lightweight SentenceTransformer embeddings (runs locally on CPU)
         self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()
@@ -24,7 +27,7 @@ class RunbookVectorStore:
         )
 
     def ingest_runbooks(self) -> int:
-        """Reads all markdown files from settings.RUNBOOKS_DIR and populates ChromaDB."""
+        """Read every markdown file under RUNBOOKS_DIR into ChromaDB."""
         runbooks_dir = settings.RUNBOOKS_DIR
         if not runbooks_dir.exists():
             print(f"[VectorStore] Warning: Directory {runbooks_dir} does not exist.")
@@ -38,9 +41,11 @@ class RunbookVectorStore:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            doc_id = filepath.stem # e.g., "db_connection_timeout"
+            doc_id = filepath.stem  # e.g., "db_connection_timeout"
             documents.append(content)
-            metadatas.append({"source": filepath.name, "title": doc_id.replace("_", " ").title()})
+            metadatas.append(
+                {"source": filepath.name, "title": doc_id.replace("_", " ").title()}
+            )
             ids.append(doc_id)
 
         if documents:
@@ -50,7 +55,7 @@ class RunbookVectorStore:
                 metadatas=metadatas,
                 ids=ids,
             )
-            print(f"[VectorStore] Successfully ingested {len(documents)} runbooks into ChromaDB.")
+            print(f"[VectorStore] Ingested {len(documents)} runbooks into ChromaDB.")
 
         return len(documents)
 
@@ -71,11 +76,13 @@ class RunbookVectorStore:
                 results["metadatas"][0],
                 results["distances"][0],
             ):
-                matched_docs.append({
-                    "content": doc,
-                    "metadata": meta,
-                    "distance": dist, # Lower distance = higher similarity
-                })
+                matched_docs.append(
+                    {
+                        "content": doc,
+                        "metadata": meta,
+                        "distance": dist,  # Lower distance = higher similarity
+                    }
+                )
 
         return matched_docs
 

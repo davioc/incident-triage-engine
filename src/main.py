@@ -8,22 +8,22 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-
 # Read .env from root directory and populate os.environ
 load_dotenv()
 
 # Surface engine/analyzer warnings (unparseable lines, degraded analysis) in dev runs.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-# Ensures the project root is ALWAYS in Python's search path
+# Ensures the project root is ALWAYS in Python's search path, so the imports below
+# resolve whether uvicorn or a plain interpreter starts this module.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 # Standard absolute imports using 'src.'
-from src.api.routes import router as api_router
+from src.api.routes import router as api_router  # noqa: E402
 
 app = FastAPI(title="Incident Triage Engine", version="1.0.0")
 
@@ -37,11 +37,14 @@ WEB_DIR = Path(__file__).parent / "web"
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
+
 # 4. Serve index.html at the root URL
 @app.get("/", response_class=FileResponse)
 async def serve_dashboard():
     return FileResponse(WEB_DIR / "index.html")
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("src.main.app", host="127.0.0.1", port=8000, reload=True)
