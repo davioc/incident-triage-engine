@@ -1,28 +1,40 @@
 """
-Incident Triage Engine orchestrating log parsing, structured LLM analysis,
-and notification routing for automated SRE incident response.
+Incident Triage Engine orchestrating log parsing, runbook retrieval, structured
+LLM analysis, and notification routing for automated SRE incident response.
 """
 
-from typing import Dict, Any, Optional #, List
+import logging
+from typing import Any, Dict, Optional, Tuple
+
 from src.log_parser import parse_log_line
 from src.llm_client import StructuredLogAnalyzer
 from src.schema import IncidentReport, SeverityLevel
 
+logger = logging.getLogger("ai-log-analyzer.engine")
+
 
 class IncidentTriageEngine:
-    """End-to-end telemetry pipeline for log extraction, LLM analysis, and alerting."""
+    """End-to-end telemetry pipeline for log extraction, analysis, and alerting."""
 
     def __init__(
         self,
         analyzer: Optional[StructuredLogAnalyzer] = None,
-        max_context_lines: int = 50
+        max_context_lines: int = 50,
+        use_runbooks: bool = False,
+        runbook_top_k: int = 2,
     ):
         """
-        Initialize engine with an optional pre-configured StructuredLogAnalyzer.
+        Initialize the engine with an optional pre-configured StructuredLogAnalyzer.
         If analyzer is None, lazy-initialization occurs on first run.
+
+        use_runbooks enables retrieval of docs/runbooks/*.md from ChromaDB so the
+        analyzer can ground its recommendations in the team's own remediation docs.
+        Retrieval is opt-in because it loads an embedding model on first use.
         """
         self.analyzer = analyzer
         self.max_context_lines = max_context_lines
+        self.use_runbooks = use_runbooks
+        self.runbook_top_k = runbook_top_k
 
     def _get_analyzer(self) -> StructuredLogAnalyzer:
         """Lazy-initialize analyzer if not provided during init."""
@@ -30,39 +42,93 @@ class IncidentTriageEngine:
             self.analyzer = StructuredLogAnalyzer()
         return self.analyzer
 
-    def process_raw_logs(self, raw_logs: str) -> Dict[str, Any]:
+    def _retrieve_runbooks(
+        self, query: str
+    ) -> Tuple[str, int, Optional[str]]:
+        """
+        Return (runbook_context, matched_count, warning). Retrieval failures are
+        reported explicitly rather than silently degrading the analysis.
+        """
+        if not self.use_runbooks or not query.strip():
+            return "", 0, None
+
+        try:
+            from src.vector_store import get_vector_store
+
+            matches = get_vector_store().query_runbooks(query, n_results=self.runbook_top_k)
+        except Exception as exc:
+            logger.warning("Runbook retrieval unavailable (%s); continuing without it.", exc)
+            return "", 0, f"runbook retrieval unavailable: {exc}"
+
+        if not matches:
+            return "", 0, None
+
+        blocks = [
+            f"--- Runbook: {m['metadata'].get('title', 'untitled')} ---\n{m['content']}"
+            for m in matches
+        ]
+        return "\n\n".join(blocks), len(matches), None
+
+    def process_raw_logs(
+        self, raw_logs: str, max_context_lines: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Full 3-stage triage pipeline:
         1. Extract and filter high-signal log lines (compression).
-        2. Generate structured IncidentReport via LLM tool calling.
-        3. Format notification routing payload (Webhook / Slack dispatch).
+        2. Retrieve matching runbooks and generate a structured IncidentReport.
+        3. Format notification routing payload (webhook / Slack dispatch).
+
+        max_context_lines is passed per call so concurrent requests cannot mutate
+        shared engine state.
         """
+        limit = max_context_lines or self.max_context_lines
+
         # Stage 1: Filter and compress logs to isolate anomalies
         lines = [line for line in raw_logs.strip().splitlines() if line.strip()]
         parsed_entries = [
-            entry for line in lines 
+            entry for line in lines
             if (entry := parse_log_line(line)) is not None
         ]
+
+        # Unparseable lines are counted instead of being dropped silently.
+        unparseable = len(lines) - len(parsed_entries)
+        if unparseable:
+            logger.warning(
+                "%d of %d log lines did not match the expected log format.",
+                unparseable,
+                len(lines),
+            )
 
         # Extract errors based on level or HTTP status >= 400
         error_entries = [
             entry for entry in parsed_entries
-            if entry.get("level") in ("ERROR", "CRITICAL", "FATAL") or entry.get("status", 0) >= 400
+            if entry.get("level") in ("ERROR", "CRITICAL", "FATAL")
+            or entry.get("status", 0) >= 400
         ]
 
         # Compress context window
         if error_entries:
             lines_to_analyze = [
                 f"{e['timestamp']} [{e['level']}] {e['status']} {e['latency_ms']}ms - {e['message']}"
-                for e in error_entries[:self.max_context_lines]
+                for e in error_entries[:limit]
             ]
             compressed_context = "\n".join(lines_to_analyze)
+            runbook_query = "\n".join(e["message"] for e in error_entries[:limit])
         else:
-            compressed_context = "\n".join(lines[:self.max_context_lines])
+            compressed_context = "\n".join(lines[:limit])
+            runbook_query = ""
 
-        # Stage 2: Analyze compressed context via Structured LLM Client
+        # Stage 2: Runbook retrieval, then structured analysis
+        runbook_context, runbooks_matched, runbook_warning = self._retrieve_runbooks(
+            runbook_query
+        )
+
         analyzer = self._get_analyzer()
-        report: IncidentReport = analyzer.analyze_logs(compressed_context)
+        report: IncidentReport = analyzer.analyze_logs(
+            compressed_context, runbook_context=runbook_context
+        )
+
+        degraded_reason = getattr(analyzer, "degraded_reason", None)
 
         # Stage 3: Route and format triage response
         notification_payload = self.format_notification_payload(report)
@@ -73,8 +139,13 @@ class IncidentTriageEngine:
             "metadata": {
                 "total_logs_ingested": len(parsed_entries),
                 "error_logs_analyzed": len(error_entries),
+                "unparseable_lines": unparseable,
                 "requires_escalation": report.requires_escalation,
-            }
+                "analysis_mode": getattr(analyzer, "mode", None),
+                "degraded": degraded_reason,
+                "runbooks_matched": runbooks_matched,
+                "runbook_warning": runbook_warning,
+            },
         }
 
     def format_notification_payload(self, report: IncidentReport) -> Dict[str, Any]:

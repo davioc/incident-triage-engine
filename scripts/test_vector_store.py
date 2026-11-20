@@ -1,24 +1,40 @@
-from src.vector_store import vector_store
+"""
+Manual smoke test for the runbook vector store: ingests docs/runbooks/*.md and
+runs similarity queries. Run as `python scripts/test_vector_store.py`.
+"""
 
-if __name__ == "__main__":
+from src.vector_store import get_vector_store
+
+TEST_QUERIES = [
+    "Database Connection Timeout on pool acquisition",
+    "Redis cluster unreachable host=10.0.4.12",
+    "Rate limiter triggered user_id=89231",
+]
+
+
+def main() -> None:
+    store = get_vector_store()
+
     print("--- 1. Ingesting Runbooks ---")
-    count = vector_store.ingest_runbooks()
-    print(f"Total documents in vector DB: {count}\n")
+    count = store.ingest_runbooks()
+    print(f"Documents in vector DB: {store.collection.count()}\n")
+
+    if count == 0:
+        print("No runbooks found; nothing to query.")
+        return
 
     print("--- 2. Testing Similarity Queries ---")
-    test_queries = [
-        "Database Connection Timeout on pool acquisition",
-        "Redis cluster unreachable host=10.0.4.12",
-        "Rate limiter triggered user_id=89231",
-    ]
-
-    for q in test_queries:
-        print(f"nQuery: '{q}'")
-        results = vector_store.query_runbooks(q, n_results=1)
+    for query in TEST_QUERIES:
+        print(f"Query: '{query}'")
+        results = store.query_runbooks(query, n_results=1)
         if results:
             match = results[0]
             print(f"Top Match: {match['metadata']['title']} (Source: {match['metadata']['source']})")
-            print(f"Similarity Score (Disctance): {match['distance']:.4f}")
+            print(f"Cosine distance (lower = closer): {match['distance']:.4f}")
             print(f"Preview: {match['content'][:150].strip()}...")
         else:
             print("No matches found.")
+
+
+if __name__ == "__main__":
+    main()

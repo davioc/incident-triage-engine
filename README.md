@@ -14,30 +14,62 @@
 
 ## 🏗️ Architecture & Pipeline Flow
 
-The system processes incoming log streams through a 4-stage pipeline before rendering real-time HTML fragments via HTMX:
+A request body is a JSON payload (`{"raw_logs": "...", "max_context_lines": 50}`). The
+HTMX dashboard posts it with the `json-enc` extension, and the same endpoint serves
+API clients and webhooks.
 
 ```text
-[ Raw Logs / Form Payload ]
+[ JSON Payload: raw_logs ]
             │
             ▼
 ┌──────────────────────────┐
-│  Stage 1: Extraction     │  FastAPI Router & HTMX Form Unwrapper
+│  Stage 1: Extraction     │  FastAPI router, Pydantic payload validation
 └───────────┬──────────────┘
             │
             ▼
 ┌──────────────────────────┐
 │  Stage 2: Parsing Engine │  Pre-compiled RegEx & ISO-8601 Extractor
-└───────────┬──────────────┘
+└───────────┬──────────────┘   (unparseable lines are counted, not dropped)
+            │
+            ▼
+┌──────────────────────────┐
+│  Stage 3: Runbook Match  │  ChromaDB similarity search over docs/runbooks/*.md
+└───────────┬──────────────┘   (opt-in: engine(use_runbooks=True))
             │
             ▼
 ┌──────────────────────────┐  TRIAGE_MODE Routing:
-│  Stage 3: LLM Analysis   │  ├── mock   -> Heuristic / Regex Fallback
-└───────────┬──────────────┘  ├── ollama -> Local Llama 3.2 (Offline)
-            │                 └── openai -> GPT-4o Tool-Calling
+│  Stage 4: LLM Analysis   │  ├── mock   -> Heuristic extraction, no network
+└───────────┬──────────────┘  ├── ollama -> Local Llama 3.2 (OpenAI-compatible)
+            │                 └── openai -> GPT-4o tool calling
             ▼
 ┌──────────────────────────┐
-│  Stage 4: UI Rendering   │  Pydantic Schema Validation & HTMX Fragment Swap
+│  Stage 5: Response       │  IncidentReport validation, Slack payload, HTMX fragment
 └──────────────────────────┘
+```
+
+**Failure policy:** provider/network failures degrade to heuristic analysis and the
+report is marked degraded (`requires_escalation = False`, `metadata.degraded` set), so a
+fabricated alert never looks like LLM analysis. Output that fails `IncidentReport`
+validation is rejected with HTTP 502 rather than silently replaced.
+
+---
+
+## 🗂️ Repository Structure
+
+```text
+src/api/routes.py     # The /api/v1 contract + HTMX HTML fragment rendering
+src/api.py            # Standalone API app (mounts that router)
+src/main.py           # Dashboard app (router + src/web/index.html at /)
+src/engine.py         # Parse -> runbook retrieval -> analyze -> alert payload
+src/llm_client.py     # mock / ollama / openai modes, schema-enforced tool calling
+src/log_parser.py     # Log line regex, metrics, synthetic log generator
+src/schema.py         # SeverityLevel, LogAnomaly, IncidentReport (Pydantic v2)
+src/vector_store.py   # ChromaDB runbook index (lazy, created on first use)
+src/web/index.html    # Dashboard UI (HTMX + Tailwind via CDN)
+scripts/incident_cli.py         # CLI: JSON-lines log file -> incident report
+scripts/test_vector_store.py    # CLI: ingest runbooks and probe similarity queries
+docs/runbooks/*.md    # Remediation runbooks indexed for retrieval
+tests/                # pytest suite (parser, schema, llm client, engine, api, cli)
 ```
 
 ---
@@ -45,8 +77,9 @@ The system processes incoming log streams through a 4-stage pipeline before rend
 ## 🧰 Tech Stack
 
 - **Backend:** Python 3.11+, FastAPI, Pydantic v2, `python-dotenv`
-- **Frontend:** HTMX, Tailwind CSS, Jinja2 / HTML Fragments
-- **AI / LLM Integration:** OpenAI API (`gpt-4o`), Ollama (Local Llama 3.2), Fallback Heuristic Engine
+- **Frontend:** HTMX + Tailwind CSS (CDN), server-rendered HTML fragments
+- **Retrieval:** ChromaDB with the default local embedding function (CPU)
+- **AI / LLM Integration:** OpenAI API (`gpt-4o`), Ollama (Llama 3.2), heuristic fallback
 
 ---
 
@@ -121,26 +154,44 @@ Then open <http://127.0.0.1:8000> in a browser. The application provides:
 - Interactive API documentation: <http://127.0.0.1:8000/docs>
 - Triage endpoint: `POST /api/v1/triage`
 
-The default `TRIAGE_MODE` is `mock`, so the dashboard can analyze logs immediately
-using the local heuristic analyzer.
+`TRIAGE_MODE` defaults to `mock` when unset, so the dashboard analyzes logs offline with
+the heuristic analyzer. Note that the committed root `.env` currently sets
+`TRIAGE_MODE=openai`, so triage calls out to OpenAI unless you change it.
 
-### 5. Run the command-line demo
+### 5. Index the runbooks (optional, enables retrieval)
+
+The served app queries ChromaDB for runbooks matching the error messages, which grounds
+`recommended_actions` in your own remediation docs. The index is built lazily on first
+use; ingest it once:
+
+```bash
+python scripts/test_vector_store.py
+```
+
+The database lives in `.chroma_db/` (created automatically). Tests and `run_triage.py`
+leave retrieval off, so the suite stays fast and offline.
+
+### 6. Run the command-line demo
 
 In a second terminal, activate the same virtual environment and run:
 
 ```bash
-python run_triage.py
+python run_triage.py            # synthetic logs through a mocked analyzer
+python scripts/incident_cli.py path/to/logs.jsonl   # one JSON object per line
 ```
 
-### 6. Run the tests
+### 7. Run the tests
 
 ```bash
 python -m pytest
 ```
 
+`tests/test_log_parser.py` pins the strict log format on purpose: a missing `[LEVEL]`, a
+status that is not exactly three digits, or `45 ms` with a space must be rejected.
+
 ### Optional: configure an LLM provider
 
-Copy or edit the root `.env` file and set one of the supported modes:
+Edit the root `.env` file and set one of the supported modes:
 
 ```dotenv
 TRIAGE_MODE=mock
@@ -148,5 +199,8 @@ TRIAGE_MODE=mock
 
 For OpenAI, set `TRIAGE_MODE=openai` and provide `OPENAI_API_KEY`. For Ollama, set
 `TRIAGE_MODE=ollama`, start Ollama locally, and optionally set `OLLAMA_MODEL` and
-`OLLAMA_BASE_URL`. The application falls back to local mock analysis if an external
-LLM request fails.
+`OLLAMA_BASE_URL`. An unknown `TRIAGE_MODE` is a startup error, not a silent fallback.
+
+If a provider call fails at runtime, the engine degrades to heuristic analysis: the
+report is labelled `[DEGRADED]`, `metadata.degraded` carries the reason, and escalation
+is suppressed. Keep `.env` (and any real key) out of version control.

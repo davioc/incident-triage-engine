@@ -16,7 +16,7 @@ def test_health_check_endpoint():
     assert response.json()["status"] == "healthy"
 
 
-@patch("src.api.engine")
+@patch("src.api.routes.engine")
 def test_triage_endpoint_success(mock_engine):
     # Mock engine execution to keep test offline and fast
     mock_report = IncidentReport(

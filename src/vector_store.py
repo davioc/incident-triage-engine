@@ -80,6 +80,15 @@ class RunbookVectorStore:
         return matched_docs
 
 
+_store: "RunbookVectorStore | None" = None
 
-# Global instance
-vector_store = RunbookVectorStore()
+
+def get_vector_store() -> "RunbookVectorStore":
+    """
+    Lazily create the shared ChromaDB client. Building it loads an embedding model,
+    so it must not happen at import time — only when runbook retrieval is requested.
+    """
+    global _store
+    if _store is None:
+        _store = RunbookVectorStore()
+    return _store

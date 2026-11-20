@@ -10,6 +10,11 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <!-- HTMX JSON Enc extension to post form data as JSON -->
     <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/json-enc.js"></script>
+    <style>
+        /* HTMX only adds .htmx-request while a request is in flight. */
+        .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in-out; }
+        .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+    </style>
 </head>
 <body class="h-full flex flex-col font-sans antialiased" hx-ext="json-enc">
 
@@ -17,11 +22,11 @@
     <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-4 flex items-center justify-between">
         <div class="flex items-center space-x-3">
             <span class="inline-block w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
-            <h1 class="text-xl font-bold tracking-light text-white">SRE Log Triage & Incident Engine</h1>
+            <h1 class="text-xl font-bold tracking-wide text-white">SRE Log Triage & Incident Engine</h1>
         </div>
         <div class="flex items-center space-x-4 text-xs text-slate-400">
             <span>Target: <code class="text-sky-400">/api/v1/triage</code></span>
-            <span class="inlign-block w-px h-4 bg-slate-800"></span>
+            <span class="inline-block w-px h-4 bg-slate-800"></span>
             <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700">v1.0.0</span>
         </div>
     </header>
@@ -43,7 +48,8 @@
             <form hx-post="/api/v1/triage"
                   hx-ext="json-enc"
                   hx-target="#triage-results"
-                  hx-indicators="#loading-spinner"
+                  hx-indicator="#loading-spinner"
+                  hx-on:htmx:responseError="showRequestError(event)"
                   class="flex-1 flex flex-col space-y-4">
                 
                 <div class="flex-1 flex flex-col">
@@ -76,8 +82,8 @@
                 <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wider">Triage Analysis & Metrics</h2>
 
                 <!-- HTMX Loading Indicator -->
-                <div id="Loading-spinner" class="htmx-indicator flex items-center space-x-2 text-sky-400 text-xs">
-                    <svg class="animate-spin h-4 w-4 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewbox="0 0 24 24">
+                <div id="loading-spinner" class="htmx-indicator flex items-center space-x-2 text-sky-400 text-xs">
+                    <svg class="animate-spin h-4 w-4 text-sky-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
@@ -87,7 +93,7 @@
 
             <!-- Dynamic Results Target Area -->
             <div id="triage-results" class="flex-1 flex flex-col justify-center items-center text-center p-8 border-2 border-dashed border-slate-800 rounded-lg bg-slate-950/50">
-                <svg class="w-12 h-12 text-slate-700 mb-3" fill="none" stroke="currentColor" viewbox="0 0 24 24">
+                <svg class="w-12 h-12 text-slate-700 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                 </svg>
                 <p class="text-slate-400 text-sm font-medium">No Triage Report Generated</p>
@@ -112,6 +118,20 @@
             2026-09-22T21:14:02.301Z [INFO]  status=200 latency=42ms  msg="GET /api/v1/health operational"
     -->
     <script>
+        function showRequestError(event) {
+            const xhr = event.detail.xhr;
+            let detail = xhr.responseText || 'The triage request failed.';
+            try {
+                const body = JSON.parse(xhr.responseText);
+                if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+            } catch (e) { /* keep raw text */ }
+
+            document.getElementById('triage-results').innerHTML =
+                '<div class="p-4 rounded-lg border border-rose-700/50 bg-rose-900/30 text-sm text-rose-200">'
+                + '<span class="font-semibold uppercase text-xs tracking-wider">Request failed (' + xhr.status + ')</span>'
+                + '<p class="mt-2 font-mono text-xs break-all">' + detail + '</p></div>';
+        }
+
         function loadSampleLogs() {
             const sampleLogs = 
            `2026-09-22T21:14:02.102Z [ERROR] status=500 latency=482ms msg="Database Connection Timeout on pool acquisition"

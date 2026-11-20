@@ -1,3 +1,9 @@
+"""
+Dashboard application: serves src/web/index.html at / and mounts the shared
+/api/v1 router (health + triage) from src/api/routes.py.
+"""
+
+import logging
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
@@ -5,6 +11,9 @@ from dotenv import load_dotenv
 
 # Read .env from root directory and populate os.environ
 load_dotenv()
+
+# Surface engine/analyzer warnings (unparseable lines, degraded analysis) in dev runs.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 # Ensures the project root is ALWAYS in Python's search path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -18,7 +27,7 @@ from src.api.routes import router as api_router
 
 app = FastAPI(title="SRE Log Triage Engine", version="1.0.0")
 
-# 1. Register API routes from routes.py
+# 1. Register API routes from routes.py (includes /api/v1/health)
 app.include_router(api_router)
 
 # 2. Path to the web frontend directory

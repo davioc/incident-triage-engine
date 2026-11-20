@@ -4,13 +4,15 @@ import re
 import time
 from typing import TypedDict
 
-# Support both traditional logs and key-value/ISO 8601 formatted logs
+# Support both traditional logs and key-value/ISO 8601 formatted logs.
+# Fractional milliseconds and fractional ISO seconds are accepted; malformed
+# variants (missing brackets, wrong status width, "45 ms") are rejected by design.
 LOG_PATTERN = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+Z)?)\s+"
+    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s+"
     r"\[(\w+)\]\s+"
     r"(?:status=)?(\d{3})\s+"
-    r"(?:latency=)?(\d+)ms\s+"
-    r"(?:msg=|\-\s+)?(.*)$"
+    r"(?:latency=)?(\d+(?:\.\d+)?)ms\s+"
+    r"(?:msg=|\-\s+)(.*)$"
 )
 
 
@@ -18,7 +20,7 @@ class LogEntry(TypedDict):
     timestamp: str
     level: str
     status: int
-    latency_ms: int
+    latency_ms: float
     message: str
 
 
@@ -37,20 +39,27 @@ class LogAnalysis(TypedDict):
 
 
 def parse_log_line(line: str) -> LogEntry | None:
-    match = LOG_PATTERN.match(line.strip())
+    if not isinstance(line, str):
+        raise TypeError(f"parse_log_line expects a string, got {type(line).__name__}")
+
+    # Match against the raw line: the anchored pattern rejects leading whitespace,
+    # and $ leaves a trailing newline (or CRLF carriage return) where it is.
+    match = LOG_PATTERN.match(line)
     if not match:
         return None
 
     timestamp, log_level, status_code, latency, message = match.groups()
-    
+
     # Strip quotes if msg="..." key-value format was used
     clean_msg = message.strip('"\'')
+
+    latency_value = float(latency)
 
     return {
         "timestamp": timestamp,
         "level": log_level,
         "status": int(status_code),
-        "latency_ms": int(latency),
+        "latency_ms": latency_value,
         "message": clean_msg,
     }
 
