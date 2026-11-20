@@ -5,15 +5,16 @@ import json
 from pydantic import ValidationError
 
 # Add the parent directory to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.schema import IncidentReport
+from src.schema import IncidentReport  # noqa: E402
 
 
 def parse_logs(log_file_path):
     """Read the log file and return its non-empty lines (one JSON object per line)."""
     with open(log_file_path, "r", encoding="utf-8") as log_file:
         return [line for line in log_file.read().splitlines() if line.strip()]
+
 
 def generate_incident_report(logs):
     anomalies = []
@@ -23,7 +24,7 @@ def generate_incident_report(logs):
             anomalies.append(anomaly)
         except json.JSONDecodeError:
             raise ValueError(f"Malformed log entry: {log}")
-    
+
     # Placeholder function to call an LLM and generate the incident report
     # This function should be replaced with actual LLM integration
     return {
@@ -35,13 +36,16 @@ def generate_incident_report(logs):
         "anomalies": anomalies,
         "recommended_actions": [
             "Check database server status",
-            "Restart affected services"
+            "Restart affected services",
         ],
-        "requires_escalation": True
-    }      
+        "requires_escalation": True,
+    }
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Process support logs and generate an incident report.")
+    parser = argparse.ArgumentParser(
+        description="Process support logs and generate an incident report."
+    )
     parser.add_argument("log_file_path", type=str, help="Path to the log file.")
     args = parser.parse_args()
 
@@ -57,6 +61,7 @@ def main():
             print("Validation Error:", e)
     except ValueError as e:
         print(e)
+
 
 if __name__ == "__main__":
     main()

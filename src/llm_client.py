@@ -30,7 +30,16 @@ DEFAULT_ACTIONS = [
 ]
 
 IGNORED_KEYS = {
-    "host", "ip", "port", "user_id", "status", "latency", "msg", "pid", "env", "timestamp",
+    "host",
+    "ip",
+    "port",
+    "user_id",
+    "status",
+    "latency",
+    "msg",
+    "pid",
+    "env",
+    "timestamp",
 }
 
 
@@ -124,12 +133,18 @@ class StructuredLogAnalyzer:
                     {"role": "user", "content": user_prompt},
                 ],
                 tools=[tool_definition],
-                tool_choice={"type": "function", "function": {"name": "generate_incident_report"}},
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "generate_incident_report"},
+                },
                 temperature=0.1,  # Low temperature for deterministic analysis
             )
         except TRANSPORT_ERRORS as exc:
             reason = f"{type(exc).__name__}: {exc}"
-            logger.warning("LLM call failed (%s). Falling back to local heuristic analysis.", reason)
+            logger.warning(
+                "LLM call failed (%s). Falling back to local heuristic analysis.",
+                reason,
+            )
             report = self._mock_report(log_batch, runbook_context)
             report.summary = f"[DEGRADED] LLM unavailable ({reason}). {report.summary}"
             report.requires_escalation = False
@@ -146,7 +161,9 @@ class StructuredLogAnalyzer:
         try:
             parsed_data = json.loads(tool_calls[0].function.arguments)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Failed to validate LLM output: tool call arguments are not JSON ({exc})") from exc
+            raise ValueError(
+                f"Failed to validate LLM output: tool call arguments are not JSON ({exc})"
+            ) from exc
 
         try:
             return IncidentReport.model_validate(parsed_data)
@@ -157,7 +174,9 @@ class StructuredLogAnalyzer:
         self, log_batch: str, runbook_context: Optional[str] = None
     ) -> IncidentReport:
         """Offline heuristic extraction: zero API calls, used for mock mode and degradation."""
-        lines = [line.strip() for line in log_batch.strip().splitlines() if line.strip()]
+        lines = [
+            line.strip() for line in log_batch.strip().splitlines() if line.strip()
+        ]
 
         extracted_anomalies: List[Dict[str, Any]] = []
         services_found: set[str] = set()
@@ -188,7 +207,8 @@ class StructuredLogAnalyzer:
             services_found.add(service)
 
             error_code = next(
-                (code for code in ("500", "503", "429", "404", "400") if code in line), "ERR"
+                (code for code in ("500", "503", "429", "404", "400") if code in line),
+                "ERR",
             )
 
             extracted_anomalies.append(
@@ -201,14 +221,19 @@ class StructuredLogAnalyzer:
                 )
             )
 
-        error_lines = [line for line in lines if "[ERROR]" in line or "status=5" in line]
+        error_lines = [
+            line for line in lines if "[ERROR]" in line or "status=5" in line
+        ]
         severity = SeverityLevel.HIGH if error_lines else SeverityLevel.MEDIUM
 
         actions = list(DEFAULT_ACTIONS)
         if runbook_context:
             for heading in runbook_context.splitlines():
                 if heading.startswith("--- Runbook:"):
-                    actions.insert(0, f"Follow runbook: {heading.removeprefix('--- Runbook:').rstrip(' -')}")
+                    action = (
+                        heading.removeprefix("--- Runbook:").strip().rstrip("-").strip()
+                    )
+                    actions.insert(0, f"Follow runbook: {action}")
 
         return IncidentReport(
             incident_id=f"INC-{uuid.uuid4().hex[:8].upper()}",

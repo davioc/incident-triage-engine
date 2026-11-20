@@ -42,9 +42,7 @@ class IncidentTriageEngine:
             self.analyzer = StructuredLogAnalyzer()
         return self.analyzer
 
-    def _retrieve_runbooks(
-        self, query: str
-    ) -> Tuple[str, int, Optional[str]]:
+    def _retrieve_runbooks(self, query: str) -> Tuple[str, int, Optional[str]]:
         """
         Return (runbook_context, matched_count, warning). Retrieval failures are
         reported explicitly rather than silently degrading the analysis.
@@ -55,9 +53,13 @@ class IncidentTriageEngine:
         try:
             from src.vector_store import get_vector_store
 
-            matches = get_vector_store().query_runbooks(query, n_results=self.runbook_top_k)
+            matches = get_vector_store().query_runbooks(
+                query, n_results=self.runbook_top_k
+            )
         except Exception as exc:
-            logger.warning("Runbook retrieval unavailable (%s); continuing without it.", exc)
+            logger.warning(
+                "Runbook retrieval unavailable (%s); continuing without it.", exc
+            )
             return "", 0, f"runbook retrieval unavailable: {exc}"
 
         if not matches:
@@ -86,8 +88,7 @@ class IncidentTriageEngine:
         # Stage 1: Filter and compress logs to isolate anomalies
         lines = [line for line in raw_logs.strip().splitlines() if line.strip()]
         parsed_entries = [
-            entry for line in lines
-            if (entry := parse_log_line(line)) is not None
+            entry for line in lines if (entry := parse_log_line(line)) is not None
         ]
 
         # Unparseable lines are counted instead of being dropped silently.
@@ -101,7 +102,8 @@ class IncidentTriageEngine:
 
         # Extract errors based on level or HTTP status >= 400
         error_entries = [
-            entry for entry in parsed_entries
+            entry
+            for entry in parsed_entries
             if entry.get("level") in ("ERROR", "CRITICAL", "FATAL")
             or entry.get("status", 0) >= 400
         ]
@@ -109,7 +111,10 @@ class IncidentTriageEngine:
         # Compress context window
         if error_entries:
             lines_to_analyze = [
-                f"{e['timestamp']} [{e['level']}] {e['status']} {e['latency_ms']}ms - {e['message']}"
+                (
+                    f"{e['timestamp']} [{e['level']}] {e['status']} "
+                    f"{e['latency_ms']}ms - {e['message']}"
+                )
                 for e in error_entries[:limit]
             ]
             compressed_context = "\n".join(lines_to_analyze)
@@ -149,7 +154,7 @@ class IncidentTriageEngine:
         }
 
     def format_notification_payload(self, report: IncidentReport) -> Dict[str, Any]:
-        """Formats IncidentReport into a standard operational alert payload (Slack/PagerDuty)."""
+        """Format an IncidentReport as an alert payload (Slack/PagerDuty)."""
         color_map = {
             SeverityLevel.CRITICAL: "#FF0000",
             SeverityLevel.HIGH: "#FFA500",
@@ -158,10 +163,14 @@ class IncidentTriageEngine:
             SeverityLevel.INFO: "#808080",
         }
 
-        actions_list = "\n".join([f"• {action}" for action in report.recommended_actions])
+        actions_list = "\n".join(
+            [f"• {action}" for action in report.recommended_actions]
+        )
 
         return {
-            "channel": "#alerts-critical" if report.requires_escalation else "#alerts-info",
+            "channel": (
+                "#alerts-critical" if report.requires_escalation else "#alerts-info"
+            ),
             "attachments": [
                 {
                     "color": color_map.get(report.severity, "#808080"),

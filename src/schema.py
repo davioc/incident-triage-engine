@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class SeverityLevel(str, Enum):
     """Normalized incident severity level."""
+
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
@@ -24,23 +25,21 @@ class LogAnomaly(BaseModel):
 
     timestamp: str = Field(
         ...,
-        description="ISO 8601 timestamp or raw log timestamp when the anomaly occurred."
+        description="ISO 8601 timestamp or raw log timestamp when the anomaly occurred.",
     )
     service_name: str = Field(
         ...,
-        description="Name of the microservice or system component originating the log entry."
+        description="Name of the microservice or system component originating the log entry.",
     )
     error_code: Optional[str] = Field(
         default=None,
-        description="HTTP status code, SQL error code, or exception class name if present."
+        description="HTTP status code, SQL error code, or exception class name if present.",
     )
     message: str = Field(
-        ...,
-        description="Brief summary of the error message or unusual behavior."
+        ..., description="Brief summary of the error message or unusual behavior."
     )
     raw_log_line: str = Field(
-        ...,
-        description="The exact original log line that triggered this detection."
+        ..., description="The exact original log line that triggered this detection."
     )
 
 
@@ -50,34 +49,33 @@ class IncidentReport(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     incident_id: str = Field(
-        ...,
-        description="Unique identifier for the incident, e.g., 'INC-2026-001'."
+        ..., description="Unique identifier for the incident, e.g., 'INC-2026-001'."
     )
     title: str = Field(
         ...,
-        description="Concise 1-line headline summarizing the root operational issue."
+        description="Concise 1-line headline summarizing the root operational issue.",
     )
     severity: SeverityLevel = Field(
         ...,
-        description="Overall incident severity calculated from error frequency and service impact."
+        description="Overall incident severity calculated from error frequency and service impact.",
     )
     summary: str = Field(
         ...,
-        description="2-3 sentence executive summary of what happened, root cause, and impact."
+        description="2-3 sentence executive summary of what happened, root cause, and impact.",
     )
     affected_services: List[str] = Field(
         default_factory=list,
-        description="List of all unique service names impacted by this event."
+        description="List of all unique service names impacted by this event.",
     )
     anomalies: List[LogAnomaly] = Field(
         default_factory=list,
-        description="Collection of specific extracted log anomalies supporting this triage."
+        description="Collection of specific extracted log anomalies supporting this triage.",
     )
     recommended_actions: List[str] = Field(
         ...,
-        description="Actionable remediation steps ordered by priority for Tier 2/3 engineering response."
+        description="Actionable remediation steps ordered by priority for Tier 2/3 engineering response.",
     )
     requires_escalation: bool = Field(
         default=False,
-        description="Set to true if CRITICAL/HIGH severity requires immediate on-call notification."
+        description="Set to true if CRITICAL/HIGH severity requires immediate on-call notification.",
     )

@@ -68,7 +68,9 @@ async def health_check() -> Dict[str, str]:
     summary="Ingest raw logs and generate a structured triage report",
     response_model=TriageResponse,
     responses={
-        200: {"description": "JSON TriageResponse, or an HTML fragment for HTMX requests"},
+        200: {
+            "description": "JSON TriageResponse, or an HTML fragment for HTMX requests"
+        },
         502: {"description": "Analyzer output failed IncidentReport schema validation"},
     },
 )
@@ -163,13 +165,18 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
         "LOW": "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
         "INFO": "text-slate-400 border-slate-700 bg-slate-900",
     }
-    sev_class = severity_colors.get(severity, "text-slate-400 border-slate-700 bg-slate-900")
+    sev_class = severity_colors.get(
+        severity, "text-slate-400 border-slate-700 bg-slate-900"
+    )
 
-    services_badges = "".join(
-        f'<span class="inline-block px-2 py-0.5 text-xs font-mono rounded bg-slate-700 '
-        f'text-slate-300 mr-1 mb-1">{_esc(svc)}</span>'
-        for svc in affected_services
-    ) or '<span class="text-xs text-slate-500">None</span>'
+    services_badges = (
+        "".join(
+            f'<span class="inline-block px-2 py-0.5 text-xs font-mono rounded bg-slate-700 '
+            f'text-slate-300 mr-1 mb-1">{_esc(svc)}</span>'
+            for svc in affected_services
+        )
+        or '<span class="text-xs text-slate-500">None</span>'
+    )
 
     actions_html = (
         "".join(f"<li class='mt-1'>{_esc(act)}</li>" for act in actions)
@@ -190,8 +197,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
             msg = getattr(a, "message", getattr(a, "raw_log_line", ""))
             ts = getattr(a, "timestamp", "")
 
-        anomalies_list.append(
-            f"""
+        anomalies_list.append(f"""
             <div class="p-2 rounded bg-slate-900/60 border border-slate-700/50 space-y-1">
                 <div class="flex items-center justify-between text-xs font-mono text-slate-400">
                     <span class="text-rose-400 font-semibold">[{_esc(svc)}]{f' Error {_esc(code)}' if code else ''}</span>
@@ -199,8 +205,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
                 </div>
                 <p class="text-xs text-slate-300 font-mono break-all">{_esc(msg)}</p>
             </div>
-            """
-        )
+            """)
 
     anomalies_html = (
         "".join(anomalies_list)
@@ -212,7 +217,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
         'border border-rose-700/50">Escalation Required</span>'
         if requires_escalation
         else '<span class="px-2 py-0.5 text-xs font-medium rounded bg-slate-700 text-slate-400">'
-        'Standard Handling</span>'
+        "Standard Handling</span>"
     )
 
     degraded_note = ""
@@ -220,7 +225,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
     if degraded_reason:
         degraded_note = (
             '<p class="text-xs text-amber-400 mt-2">Degraded analysis: '
-            f'{_esc(degraded_reason)}. Treat the actions above as heuristic, not LLM-derived.</p>'
+            f"{_esc(degraded_reason)}. Treat the actions above as heuristic, not LLM-derived.</p>"
         )
 
     return f"""

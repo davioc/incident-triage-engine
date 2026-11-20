@@ -51,7 +51,7 @@ def parse_log_line(line: str) -> LogEntry | None:
     timestamp, log_level, status_code, latency, message = match.groups()
 
     # Strip quotes if msg="..." key-value format was used
-    clean_msg = message.strip('"\'')
+    clean_msg = message.strip("\"'")
 
     latency_value = float(latency)
 
@@ -99,10 +99,16 @@ def generate_sample_logs(count: int = 10000) -> list[str]:
     """Utility to generate dummy log data for benchmarking."""
     levels = ["INFO", "WARN", "ERROR"]
     statuses = [200, 201, 400, 404, 500]
+
+    def level_for(status: int) -> str:
+        """A 4xx/5xx status is logged as ERROR; anything else picks a normal level."""
+        return "ERROR" if status >= 400 else random.choice(levels)
+
     return [
-        f"2026-09-01 12:00:00 "
-        f"[{'ERROR' if (status := random.choice(statuses)) >= 400 else random.choice(levels)}] "
-        f"{status} {random.randint(10, 500)}ms - GET /api/v1/resource/{i}"
+        (
+            f"2026-09-01 12:00:00 [{level_for(status := random.choice(statuses))}] "
+            f"{status} {random.randint(10, 500)}ms - GET /api/v1/resource/{i}"
+        )
         for i in range(count)
     ]
 
