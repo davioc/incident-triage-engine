@@ -14,10 +14,12 @@ __pycache__/
 .env
 *.env
 
-# IDE files
+# IDE / agent tooling (local only; .github must stay committable for CI workflows)
 .vscode/
 .idea/
 .cursor/
+.continue/
+.strata/
 
 # Vector Store / Local Database
 .chroma_db
