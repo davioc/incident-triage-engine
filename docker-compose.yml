@@ -19,13 +19,36 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
       # The index lives on a named volume, not inside the image.
       CHROMA_DB_DIR: /app/.chroma_db
+      # Report storage. Empty means disabled; the stack below sets a real URL.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://triage:triage@postgres:5432/triage}
     volumes:
       # Persist the runbook index so ingest survives restarts. The app user owns it;
       # without this the non-root container cannot write into its own home directory.
       - chroma_db:/app/.chroma_db
+    # The reports table is migrated at container start, so the database must be
+    # reachable before the service accepts requests.
+    depends_on:
+      postgres:
+        condition: service_healthy
     # No depends_on for ollama: Compose rejects a dependency on a profile-gated
     # service, and the engine already degrades to heuristics when no LLM answers.
     profiles: [""]
+
+  # Local development credentials. Override POSTGRES_PASSWORD for anything real;
+  # these defaults exist so `docker compose up` works without extra configuration.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage}
+      POSTGRES_DB: ${POSTGRES_DB:-triage}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-triage} -d ${POSTGRES_DB:-triage}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # Only started with --profile llm, or when TRIAGE_MODE=ollama pulls it in via
   # depends_on. Set TRIAGE_MODE=ollama in .env to use it.
@@ -38,3 +61,4 @@ services:
 volumes:
   chroma_db:
   ollama_models:
+  postgres_data:

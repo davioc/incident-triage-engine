@@ -36,6 +36,11 @@ COPY src ./src
 COPY scripts ./scripts
 COPY docs/runbooks ./docs/runbooks
 
+# Migrations ship with the image so the container can bring the reports table up to
+# date at start; alembic.ini keeps no URL, env.py reads DATABASE_URL like the app does.
+COPY alembic.ini .
+COPY alembic ./alembic
+
 # The embedder caches under the *runtime user's* home, so warm it as that user.
 COPY --from=warm-cache /root/.cache/chroma /home/app/.cache/chroma
 
@@ -54,7 +59,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4)"
 
-# The served app enables runbook retrieval, so the index must exist before requests
-# arrive; otherwise every triage returns zero matches. Upsert is idempotent, so this
-# re-ingests on each start and picks up runbooks mounted from the volume.
-CMD ["sh", "-c", "python scripts/ingest_runbooks.py && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000"]
+# Migrations run before the service starts, and only when a database is configured:
+# report storage is opt-in, so a stack without DATABASE_URL still comes up offline.
+# A failed migration stops the container rather than serving reports from a mismatched
+# schema. The served app enables runbook retrieval, so the index must exist before
+# requests arrive; otherwise every triage returns zero matches. Upsert is idempotent,
+# so this re-ingests on each start and picks up runbooks mounted from the volume.
+CMD ["sh", "-c", "if [ -n \"$DATABASE_URL\" ]; then python -m alembic upgrade head || exit 1; fi && python scripts/ingest_runbooks.py && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000"]
