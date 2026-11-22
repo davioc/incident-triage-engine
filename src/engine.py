@@ -147,6 +147,7 @@ class IncidentTriageEngine:
                 "unparseable_lines": unparseable,
                 "requires_escalation": report.requires_escalation,
                 "analysis_mode": getattr(analyzer, "mode", None),
+                "model": getattr(analyzer, "model", None),
                 "degraded": degraded_reason,
                 "runbooks_matched": runbooks_matched,
                 "runbook_warning": runbook_warning,

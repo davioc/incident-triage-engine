@@ -7,13 +7,17 @@ implementation of each endpoint.
 
 import html
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from src.config import settings
 from src.engine import IncidentTriageEngine
+from src.llm_client import StructuredLogAnalyzer
 from src.schema import IncidentReport
 
 logger = logging.getLogger("incident-triage-engine.api")
@@ -53,13 +57,135 @@ class TriageResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
+# --- Runtime analysis-backend switching -------------------------------------------
+# The dashboard offers these three choices; a curl/CI caller may pass any model name
+# Ollama has pulled. Env vars still set the *default*, but a switch lives only in this
+# process, so testing a model never requires editing or restarting with a new .env.
+ANALYSIS_MODES = ("mock", "ollama", "openai")
+
+MENU_LABELS = {
+    "ollama": "llama 3.2",
+    "openai": "Other OpenAI",
+    "mock": "Mock mode (default)",
+}
+
+
+def mode_options() -> List[Dict[str, Optional[str]]]:
+    """Menu entries, resolved from the environment at request time."""
+    return [
+        {
+            "mode": "ollama",
+            "label": MENU_LABELS["ollama"],
+            "model": os.getenv("OLLAMA_MODEL", "llama3.2"),
+        },
+        {"mode": "openai", "label": MENU_LABELS["openai"], "model": None},
+        {"mode": "mock", "label": MENU_LABELS["mock"], "model": None},
+    ]
+
+
+def current_mode_state() -> Dict[str, Any]:
+    """
+    Describe the analyzer the shared engine would use right now. A mode that cannot be
+    built (openai without a key) is reported with a warning instead of raising, so the
+    menu still renders and names the reason.
+    """
+    requested = os.getenv("TRIAGE_MODE", "mock").lower()
+    try:
+        analyzer = engine._get_analyzer()
+    except ValueError as exc:
+        return {
+            "mode": requested,
+            "model": None,
+            "base_url": None,
+            "api_key_present": bool(os.getenv("OPENAI_API_KEY")),
+            "warning": str(exc),
+        }
+    return {
+        "mode": getattr(analyzer, "mode", requested),
+        "model": getattr(analyzer, "model", None),
+        "base_url": getattr(analyzer, "base_url", None),
+        "api_key_present": bool(os.getenv("OPENAI_API_KEY")),
+        "warning": None,
+    }
+
+
+def mode_label(state: Dict[str, Any]) -> str:
+    """Short label shown on the Serving button, naming the model where one applies."""
+    mode = state["mode"]
+    model = state.get("model")
+    if mode == "mock":
+        return "Mock mode"
+    return f"{model or MENU_LABELS.get(mode, mode)}"
+
+
+@router.get(
+    "/api/v1/mode",
+    summary="Report the active analysis backend",
+    # The Union[HTMLResponse, JSONResponse] annotation is for typing only; FastAPI must
+    # not try to build a response model out of it.
+    response_model=None,
+    responses={200: {"description": "JSON mode state, or the HTMX menu fragment"}},
+)
+async def get_analysis_mode(request: Request) -> Union[HTMLResponse, JSONResponse]:
+    """Read the active backend. HTMX requests get the menu fragment to render in place."""
+    if request.headers.get("HX-Request") == "true":
+        return HTMLResponse(content=render_mode_html(current_mode_state()))
+    return JSONResponse(content=current_mode_state())
+
+
+@router.post(
+    "/api/v1/mode",
+    summary="Switch the analysis backend for this process",
+    response_model=None,
+    responses={
+        200: {"description": "JSON mode state, or the HTMX menu fragment"},
+        400: {"description": "Unknown mode, or a backend that cannot be built"},
+    },
+)
+async def set_analysis_mode(
+    request: Request,
+    mode: str = Query(..., description="mock, ollama or openai"),
+    model: Optional[str] = Query(
+        None, description="Model name for ollama/openai; env default when omitted."
+    ),
+) -> Union[HTMLResponse, JSONResponse]:
+    """
+    Rebuild the analyzer and attach it to the shared engine. Nothing is written to
+    .env: the switch lasts for the lifetime of the server process.
+    """
+    normalized = mode.lower()
+    if normalized not in ANALYSIS_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown mode '{mode}'. Expected one of: {', '.join(ANALYSIS_MODES)}.",
+        )
+
+    try:
+        analyzer = StructuredLogAnalyzer(mode=normalized, model=model)
+    except ValueError as exc:
+        # e.g. openai mode without OPENAI_API_KEY. Keep the previous analyzer running.
+        logger.warning("Analysis mode switch rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    engine.analyzer = analyzer
+    state = current_mode_state()
+    logger.info("Analysis backend switched to %s (%s)", state["mode"], state["model"])
+
+    if request.headers.get("HX-Request") == "true":
+        return HTMLResponse(content=render_mode_html(state))
+    return JSONResponse(content=state)
+
+
 @router.get("/api/v1/health", status_code=status.HTTP_200_OK)
 async def health_check() -> Dict[str, str]:
     """Health check endpoint for monitoring API and service availability."""
     return {
         "status": "healthy",
         "service": "incident-triage-engine",
-        "version": "1.0.0",
+        "version": settings.VERSION,
     }
 
 
@@ -130,7 +256,77 @@ def _esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+def render_mode_html(state: Dict[str, Any]) -> str:
+    """
+    The Serving control: a button naming the active backend, with a menu that opens
+    upward from the bottom action row. Menu entries post to /api/v1/mode and swap this
+    same fragment in place, so the label and the 'current' marker follow the switch.
+    """
+    current = state["mode"]
+    rows: List[str] = []
+    for opt in mode_options():
+        hint = ""
+        if opt["mode"] == "ollama":
+            hint = f'<span class="ml-auto text-[10px] text-slate-500 font-mono">{_esc(opt["model"])}</span>'
+        elif opt["mode"] == "openai" and not state["api_key_present"]:
+            hint = '<span class="ml-auto text-[10px] text-rose-400">no API key</span>'
+
+        row_class = (
+            "flex items-center w-full text-left px-3 py-2 rounded-md text-xs "
+            "font-medium transition-colors"
+        )
+        if opt["mode"] == current:
+            rows.append(
+                f'<div class="{row_class} bg-slate-800/70 text-sky-300">'
+                f'<span class="w-2 h-2 rounded-full bg-sky-400 mr-2 shrink-0"></span>'
+                f'{_esc(opt["label"])}{hint}</div>'
+            )
+        else:
+            query = f"?mode={quote(opt['mode'])}"
+            if opt["mode"] == "ollama" and opt["model"]:
+                query += f"&model={quote(str(opt['model']))}"
+            rows.append(
+                f'<button type="button" hx-post="/api/v1/mode{query}" '
+                f'hx-target="#mode-control" hx-swap="outerHTML" '
+                f'class="{row_class} text-slate-300 hover:bg-slate-800 hover:text-slate-100">'
+                f'{_esc(opt["label"])}{hint}</button>'
+            )
+
+    warning = ""
+    if state.get("warning"):
+        warning = (
+            '<p class="text-[10px] text-rose-300 px-2 pt-1 break-all">'
+            f"{_esc(state['warning'])}</p>"
+        )
+
+    detail = state.get("base_url") or (
+        "local heuristics" if current == "mock" else "api.openai.com"
+    )
+
+    return f"""
+    <div id="mode-control" class="relative shrink-0">
+        <button type="button" onclick="toggleModeMenu()" aria-haspopup="true"
+            class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm transition-colors whitespace-nowrap flex items-center space-x-2">
+            <span>Serving</span>
+            <span class="text-sky-400 font-semibold">{_esc(mode_label(state))}</span>
+            <svg class="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path>
+            </svg>
+        </button>
+        <div id="mode-menu" class="hidden absolute bottom-full left-0 mb-2 w-60 bg-slate-900 border border-slate-700 rounded-lg shadow-xl p-2 space-y-1 z-20">
+            <p class="text-[10px] uppercase tracking-wider text-slate-500 px-2">Analysis backend</p>
+            {''.join(rows)}
+            {warning}
+            <p class="text-[10px] text-slate-500 font-mono px-2 pt-1 border-t border-slate-800">{_esc(detail)}</p>
+        </div>
+    </div>
+    """
+
+
 def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
+    # Metrics ride alongside the report in the results dict; keep them before unwrapping.
+    meta = report.get("metadata", {}) if isinstance(report, dict) else {}
+
     # 1. Unwrap nested incident_report dictionary if present
     if isinstance(report, dict) and "incident_report" in report:
         report = report["incident_report"]
@@ -221,11 +417,22 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
     )
 
     degraded_note = ""
-    degraded_reason = get_val(report, "degraded_reason")
+    # The reason lives in metadata.degraded; the report dict never carries it, so reading
+    # only report["degraded_reason"] would leave a degraded analysis looking like a result.
+    degraded_reason = get_val(report, "degraded_reason") or meta.get("degraded")
     if degraded_reason:
         degraded_note = (
             '<p class="text-xs text-amber-400 mt-2">Degraded analysis: '
             f"{_esc(degraded_reason)}. Treat the actions above as heuristic, not LLM-derived.</p>"
+        )
+
+    analysis_note = ""
+    analysis_mode = meta.get("analysis_mode")
+    if analysis_mode:
+        model_suffix = f" · {meta.get('model')}" if meta.get("model") else ""
+        analysis_note = (
+            '<p class="text-[10px] text-slate-500 font-mono mt-1">'
+            f"Analysis: {_esc(analysis_mode)}{_esc(model_suffix)}</p>"
         )
 
     return f"""
@@ -242,6 +449,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
 
         <p class="text-sm text-slate-200">{summary}</p>
         {degraded_note}
+        {analysis_note}
 
         <div class="grid grid-cols-2 gap-4 text-xs py-2 border-y border-slate-700/50">
             <div>

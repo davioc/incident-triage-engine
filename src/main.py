@@ -24,8 +24,9 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 # Standard absolute imports using 'src.'
 from src.api.routes import router as api_router  # noqa: E402
+from src.config import settings  # noqa: E402
 
-app = FastAPI(title="Incident Triage Engine", version="1.0.0")
+app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 
 # 1. Register API routes from routes.py (includes /api/v1/health)
 app.include_router(api_router)

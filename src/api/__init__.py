@@ -7,6 +7,7 @@ run against the wrong app. Flask is not used anywhere in this project.
 from fastapi import FastAPI
 
 from src.api.routes import engine, router
+from src.config import settings
 
 app = FastAPI(
     title="Incident Triage Engine API",
@@ -14,7 +15,7 @@ app = FastAPI(
         "Automated log parser, context compressor, runbook retrieval and LLM "
         "root-cause triage engine."
     ),
-    version="1.0.0",
+    version=settings.VERSION,
 )
 
 app.include_router(router)

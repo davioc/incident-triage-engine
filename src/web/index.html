@@ -27,7 +27,8 @@
         <div class="flex items-center space-x-4 text-xs text-slate-400">
             <span>Target: <code class="text-sky-400">/api/v1/triage</code></span>
             <span class="inline-block w-px h-4 bg-slate-800"></span>
-            <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700">v1.0.0</span>
+            <!-- Version comes from src/config.py Settings.VERSION -->
+            <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700">v1.1.0</span>
         </div>
     </header>
 
@@ -49,7 +50,6 @@
                   hx-ext="json-enc"
                   hx-target="#triage-results"
                   hx-indicator="#loading-spinner"
-                  hx-on:htmx:responseError="showRequestError(event)"
                   class="flex-1 flex flex-col space-y-4">
                 
                 <div class="flex-1 flex flex-col">
@@ -63,6 +63,14 @@
                 </div>              
             
                 <div class="flex items-center space-x-3 pt-2">
+                    <!-- Serving menu: rendered by /api/v1/mode so the markup lives in one place.
+                         hx-target="this" is required: HTMX inherits hx-target from the enclosing
+                         form, which would swap the menu fragment into #triage-results. -->
+                    <div id="mode-control" class="shrink-0"
+                         hx-get="/api/v1/mode"
+                         hx-trigger="load"
+                         hx-target="this"
+                         hx-swap="outerHTML"></div>
                     <button type="submit"
                             class="flex-1 bg-sky-600 hover:bg-sky-500 text-white font-medium text-sm py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center space-x-2 shadow-lg shadow-sky-600/20">
                         <span>Analyze & Triage Payload</span>
@@ -118,6 +126,47 @@
             2026-09-22T21:14:02.301Z [INFO]  status=200 latency=42ms  msg="GET /api/v1/health operational"
     -->
     <script>
+        function toggleModeMenu() {
+            document.getElementById('mode-menu')?.classList.toggle('hidden');
+        }
+
+        // Close the Serving menu when clicking anywhere outside it, including after an
+        // HTMX swap replaces the control with a freshly rendered fragment.
+        document.addEventListener('click', (event) => {
+            const control = document.getElementById('mode-control');
+            const menu = document.getElementById('mode-menu');
+            if (control && menu && !control.contains(event.target)) {
+                menu.classList.add('hidden');
+            }
+        });
+
+        // Route response errors by target: htmx:responseError bubbles, so a failed mode
+        // switch must not overwrite the report area. The Serving control is replaced on
+        // every swap, which drops inline handlers, so the listener lives on document.
+        document.addEventListener('htmx:responseError', (event) => {
+            const target = event.detail && event.detail.target;
+            if (target && target.id === 'triage-results') {
+                showRequestError(event);
+                return;
+            }
+            showModeError(event);
+        });
+
+        function showModeError(event) {
+            const menu = document.getElementById('mode-menu');
+            if (!menu) return;
+            let detail = event.detail.xhr && event.detail.xhr.responseText;
+            try {
+                const body = JSON.parse(detail);
+                if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+            } catch (e) { /* keep raw text */ }
+            menu.classList.remove('hidden');
+            const note = document.createElement('p');
+            note.className = 'text-[10px] text-rose-300 px-2 pt-1 break-all';
+            note.textContent = detail || 'Backend switch failed.';
+            menu.appendChild(note);
+        }
+
         function showRequestError(event) {
             const xhr = event.detail.xhr;
             let detail = xhr.responseText || 'The triage request failed.';

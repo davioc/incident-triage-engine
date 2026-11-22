@@ -11,6 +11,7 @@ Failure policy:
 import json
 import logging
 import os
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +24,8 @@ logger = logging.getLogger("incident-triage-engine.llm")
 
 # Provider-side availability problems: safe to degrade. Schema problems are not.
 TRANSPORT_ERRORS = (APIConnectionError, APITimeoutError, APIStatusError, OSError)
+
+REPORT_TOOL_NAME = "generate_incident_report"
 
 DEFAULT_ACTIONS = [
     "Inspect log timestamps around initial error spike",
@@ -62,11 +65,17 @@ class StructuredLogAnalyzer:
 
         # Reason the most recent analysis degraded to heuristics, if it did.
         self.degraded_reason: Optional[str] = None
+        # Endpoint actually in use, for the dashboard's Serving menu.
+        self.base_url: Optional[str] = None
 
         if self.mode == "ollama":
-            # Ollama provides an OpenAI-compatible endpoint
+            # Ollama provides an OpenAI-compatible endpoint, which lives under /v1.
+            # A bare http://localhost:11434 in OLLAMA_BASE_URL would 404, so append it.
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            if not base_url.rstrip("/").endswith("/v1"):
+                base_url = base_url.rstrip("/") + "/v1"
             self.model = model or os.getenv("OLLAMA_MODEL", "llama3.2")
+            self.base_url = base_url
             self.client = OpenAI(base_url=base_url, api_key="ollama")
 
         elif self.mode == "openai":
@@ -102,12 +111,52 @@ class StructuredLogAnalyzer:
         # OLLAMA / OPENAI MODE (LLM API call)
         # -------------------------------------------------------------
 
-        system_prompt = (
-            "You are a Senior Site Reliability Engineer (SRE) assisting with incident response. "
-            "Analyze the provided log stream, identify root causes, extract critical anomalies, "
-            "and output a structured incident report by calling the `generate_incident_report` tool. "
-            "Only claim services and causes that the log lines support."
-        )
+        schema = IncidentReport.model_json_schema()
+
+        if self.mode == "ollama":
+            # Ollama does not reliably fill the structured ``tool_calls`` field for local
+            # models: it writes the call into plain text and sometimes omits required
+            # fields. Supplying the JSON schema instead constrains decoding to that
+            # schema, so every required field is emitted.
+            system_prompt = (
+                "You are a Senior Site Reliability Engineer (SRE) assisting with incident response. "
+                "Analyze the provided log stream, identify root causes, extract critical anomalies, "
+                f"and respond with a single JSON object matching the `{REPORT_TOOL_NAME}` schema. "
+                "Only claim services and causes that the log lines support."
+            )
+            request_kwargs = {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": REPORT_TOOL_NAME,
+                        "schema": schema,
+                        "strict": True,
+                    },
+                }
+            }
+        else:
+            system_prompt = (
+                "You are a Senior Site Reliability Engineer (SRE) assisting with incident response. "
+                "Analyze the provided log stream, identify root causes, extract critical anomalies, "
+                f"and output a structured incident report by calling the `{REPORT_TOOL_NAME}` tool. "
+                "Only claim services and causes that the log lines support."
+            )
+            request_kwargs = {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": REPORT_TOOL_NAME,
+                            "description": "Generates a structured SRE incident report from raw or parsed log batches.",
+                            "parameters": schema,
+                        },
+                    }
+                ],
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": REPORT_TOOL_NAME},
+                },
+            }
 
         user_prompt = f"Analyze the following log entries:\n\n{log_batch}"
         if runbook_context:
@@ -116,15 +165,6 @@ class StructuredLogAnalyzer:
                 f"{runbook_context}"
             )
 
-        tool_definition = {
-            "type": "function",
-            "function": {
-                "name": "generate_incident_report",
-                "description": "Generates a structured SRE incident report from raw or parsed log batches.",
-                "parameters": IncidentReport.model_json_schema(),
-            },
-        }
-
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -132,12 +172,8 @@ class StructuredLogAnalyzer:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                tools=[tool_definition],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "generate_incident_report"},
-                },
                 temperature=0.1,  # Low temperature for deterministic analysis
+                **request_kwargs,
             )
         except TRANSPORT_ERRORS as exc:
             reason = f"{type(exc).__name__}: {exc}"
@@ -151,24 +187,62 @@ class StructuredLogAnalyzer:
             self.degraded_reason = reason
             return report
 
-        # The model answered; parse and validate its tool call.
+        # The model answered; parse and validate its report payload.
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)
-        if not tool_calls:
-            raise ValueError(
-                "LLM response contained no generate_incident_report tool call; refusing to guess."
-            )
+        if tool_calls:
+            raw = tool_calls[0].function.arguments
+        else:
+            raw = self._tool_payload_from_text(response.choices[0].message)
 
         try:
-            parsed_data = json.loads(tool_calls[0].function.arguments)
+            parsed_data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ValueError(
-                f"Failed to validate LLM output: tool call arguments are not JSON ({exc})"
+                f"Failed to validate LLM output: report payload is not JSON ({exc})"
             ) from exc
+
+        # Some providers wrap the arguments in a {"name", "arguments"} envelope.
+        if isinstance(parsed_data, dict) and "arguments" in parsed_data:
+            parsed_data = parsed_data["arguments"]
 
         try:
             return IncidentReport.model_validate(parsed_data)
         except ValidationError as exc:
             raise ValueError(f"Failed to validate LLM output: {exc}") from exc
+
+    @staticmethod
+    def _tool_payload_from_text(message: Any) -> str:
+        """
+        A model that did not fill ``tool_calls`` puts the report in plain text instead:
+        bare JSON, a fenced ```json block, an ``<tools>`` block, or a ``{"name",
+        "arguments"}`` envelope. Recover the JSON from those shapes. This only unwraps the
+        envelope — the payload is still validated against IncidentReport, so output that
+        does not match the schema raises instead of being accepted.
+        """
+        text = (getattr(message, "content", None) or "").strip()
+        if not text:
+            raise ValueError(
+                f"LLM response contained no {REPORT_TOOL_NAME} payload; refusing to guess."
+            )
+
+        # Strip an <tools>...</tools> wrapper if present.
+        if text.startswith("<tools>") and text.endswith("</tools>"):
+            text = text[len("<tools>") : -len("</tools>")].strip()
+
+        # A fenced block anywhere in the reply is the payload; prose around it is noise.
+        fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+        if fence:
+            text = fence.group(1).strip()
+        elif not text.startswith("{"):
+            # Prose wrapping a single JSON object: take the widest brace span present.
+            start, end = text.find("{"), text.rfind("}")
+            if start == -1 or end <= start:
+                raise ValueError(
+                    f"LLM response contained no {REPORT_TOOL_NAME} payload; refusing to guess."
+                )
+            text = text[start : end + 1]
+
+        return text
 
     def _mock_report(
         self, log_batch: str, runbook_context: Optional[str] = None
