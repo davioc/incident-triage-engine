@@ -14,7 +14,7 @@ __pycache__/
 .env
 *.env
 
-# IDE / agent tooling (local only; .github must stay committable for CI workflows)
+# IDE / agent tooling (local only)
 .vscode/
 .idea/
 .cursor/
