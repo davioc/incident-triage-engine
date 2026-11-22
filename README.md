@@ -318,6 +318,11 @@ docker compose up --build -d
 $env:TRIAGE_MODE="openai"; $env:OPENAI_API_KEY="sk-..."; docker compose up --build -d
 ```
 
+Note that Compose resolves `${...}` from your shell **and** the project `.env`, so values
+there reach the container even though `.env` is never copied into the image. A leftover
+`TRIAGE_MODE=openai` with an old key makes the stack run OpenAI and return `[DEGRADED]`
+reports; start with `$env:TRIAGE_MODE="mock"` to get offline heuristic analysis.
+
 To point the app at a local Ollama (Llama 3.2, no external API), start Ollama and set:
 
 ```bash
