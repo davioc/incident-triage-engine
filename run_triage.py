@@ -17,7 +17,10 @@ def create_mock_analyzer():
         incident_id="INC-2026-8842",
         title="High Memory Usage & Service Timeout Spike",
         severity=SeverityLevel.HIGH,
-        summary="Multiple services reporting 500 status codes and elevated latency across backend endpoints.",
+        summary=(
+            "Multiple services reporting 500 status codes and elevated latency "
+            "across backend endpoints."
+        ),
         affected_services=["auth-service", "api-gateway"],
         anomalies=[
             LogAnomaly(
@@ -25,13 +28,16 @@ def create_mock_analyzer():
                 service_name="auth-service",
                 error_code="500",
                 message="DB pool connection timeout",
-                raw_log_line="2026-09-13 13:28:00 [ERROR] 500 4500ms - GET /api/v1/resource/12"
+                raw_log_line=(
+                    "2026-09-13 13:28:00 [ERROR] 500 4500ms - "
+                    "GET /api/v1/resource/12"
+                ),
             )
         ],
         recommended_actions=[
             "Inspect database connection pool exhaustion",
             "Scale auth-service replicas",
-            "Verify network latency between gateway and DB"
+            "Verify network latency between gateway and DB",
         ],
         requires_escalation=True,
     )

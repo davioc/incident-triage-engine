@@ -1,6 +1,7 @@
 import pytest
 from src.log_parser import parse_log_line, analyze_logs, generate_sample_logs
 
+
 def test_parse_valid_log_line():
     raw_line = "2026-09-01 12:00:00 [INFO] 200 45ms - GET /api/v1/health"
     expected = {
@@ -8,9 +9,10 @@ def test_parse_valid_log_line():
         "level": "INFO",
         "status": 200,
         "latency_ms": 45,
-        "message": "GET /api/v1/health"
+        "message": "GET /api/v1/health",
     }
     assert parse_log_line(raw_line) == expected
+
 
 def test_parse_invalid_log_line():
     assert parse_log_line("INVALID LOG FORMAT") is None
@@ -34,7 +36,9 @@ def test_parse_line_endings_and_padding():
 
 
 def test_parse_message_with_extra_dashes_and_brackets():
-    raw_line = "2026-09-01 12:00:00 [INFO] 200 12ms - GET /api/v1/items - id=42 [cache=miss]"
+    raw_line = (
+        "2026-09-01 12:00:00 [INFO] 200 12ms - GET /api/v1/items - id=42 [cache=miss]"
+    )
     parsed = parse_log_line(raw_line)
     assert parsed["message"] == "GET /api/v1/items - id=42 [cache=miss]"
 
@@ -56,10 +60,14 @@ def test_parse_various_levels_and_status_codes():
 
 
 def test_parse_rejects_near_miss_formats():
-    assert parse_log_line("2026-09-01 12:00:00 [INFO] 200 45 ms - space before ms") is None
+    assert (
+        parse_log_line("2026-09-01 12:00:00 [INFO] 200 45 ms - space before ms") is None
+    )
     assert parse_log_line("2026-09-01 12:00:00 [INFO] 20 45ms - short status") is None
     assert parse_log_line("2026-09-01 12:00:00 [INFO] 2000 45ms - long status") is None
-    assert parse_log_line("2026-09-01 12:00:00 INFO 200 45ms - missing brackets") is None
+    assert (
+        parse_log_line("2026-09-01 12:00:00 INFO 200 45ms - missing brackets") is None
+    )
     assert parse_log_line("2026-09-01 12:00:00 [INFO] 200 45ms GET /no-dash") is None
     assert parse_log_line("26-09-01 12:00:00 [INFO] 200 45ms - short year") is None
 
@@ -68,19 +76,21 @@ def test_parse_none_raises_type_error():
     with pytest.raises(TypeError):
         parse_log_line(None)
 
+
 def test_analyze_logs_metrics():
     logs = [
         "2026-09-01 12:00:00 [INFO] 200 50ms - GET /api/v1/users",
         "2026-09-01 12:00:01 [ERROR] 500 300ms - POST /api/v1/charge",
-        "2026-09-01 12:00:02 [WARN] 404 150ms - GET /api/v1/missing"
+        "2026-09-01 12:00:02 [WARN] 404 150ms - GET /api/v1/missing",
     ]
-    
+
     results = analyze_logs(logs)
-    
+
     assert results["total"] == 3
     assert results["error_rate"] == 66.67  # 2 out of 3 are 4xx/5xx errors
-    assert results["avg_latency"] == 166.67 # (50 + 300 + 150) / 3
-    assert results["slow_requests_count"] == 1 # 300ms > 200ms
+    assert results["avg_latency"] == 166.67  # (50 + 300 + 150) / 3
+    assert results["slow_requests_count"] == 1  # 300ms > 200ms
+
 
 def test_analyze_empty_logs():
     results = analyze_logs([])
@@ -183,6 +193,7 @@ def test_generate_sample_logs_are_parseable_and_respect_count():
     parsed = [parse_log_line(line) for line in samples]
     assert all(item is not None for item in parsed)
     assert all(item["status"] in {200, 201, 400, 404, 500} for item in parsed)
+
 
 def test_benchmark_log_parsing(benchmark):
     """Runs a performance benchmark test using pytest-benchmark."""

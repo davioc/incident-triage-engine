@@ -19,7 +19,10 @@ def test_valid_incident_report():
         summary="Auth service lost connectivity to primary DB host causing failed user sign-ins.",
         affected_services=["auth-service", "user-service"],
         anomalies=[anomaly],
-        recommended_actions=["Check database cluster status", "Restart auth-service connection pool"],
+        recommended_actions=[
+            "Check database cluster status",
+            "Restart auth-service connection pool",
+        ],
         requires_escalation=True,
     )
 
