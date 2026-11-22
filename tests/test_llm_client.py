@@ -15,7 +15,7 @@ from src.schema import IncidentReport, SeverityLevel
 def mock_openai_response():
     """Provides a mocked OpenAI chat completion response returning a tool call payload."""
     mock_response = MagicMock()
-    
+
     # Valid IncidentReport payload matching Pydantic schema
     sample_payload = {
         "incident_id": "INC-2026-001",
@@ -29,26 +29,26 @@ def mock_openai_response():
                 "service_name": "auth-service",
                 "error_code": "500",
                 "message": "DB connection timeout after 5000ms",
-                "raw_log_line": "[2026-09-04 18:00:00] ERROR auth-service DB connection timeout"
+                "raw_log_line": "[2026-09-04 18:00:00] ERROR auth-service DB connection timeout",
             }
         ],
         "recommended_actions": [
             "Inspect primary DB host health",
-            "Restart connection pool"
+            "Restart connection pool",
         ],
-        "requires_escalation": True
+        "requires_escalation": True,
     }
 
     # Structure mock to match OpenAI's response object model
     mock_tool_call = MagicMock()
     mock_tool_call.function.arguments = json.dumps(sample_payload)
-    
+
     mock_message = MagicMock()
     mock_message.tool_calls = [mock_tool_call]
-    
+
     mock_choice = MagicMock()
     mock_choice.message = mock_message
-    
+
     mock_response.choices = [mock_choice]
     return mock_response
 
@@ -63,7 +63,7 @@ def test_analyze_logs_valid_response(mock_openai_class, mock_openai_response):
 
     # Initialize analyzer with a dummy API key
     analyzer = StructuredLogAnalyzer(api_key="sk-dummy-test-key")
-    
+
     sample_log = "[2026-09-04 18:00:00] ERROR auth-service DB connection timeout"
     report = analyzer.analyze_logs(sample_log)
 
@@ -83,7 +83,7 @@ def test_analyze_logs_validation_error(mock_openai_class):
     mock_tool_call = MagicMock()
     # Invalid payload: missing required fields 'title' and 'severity'
     mock_tool_call.function.arguments = json.dumps({"incident_id": "INC-002"})
-    
+
     mock_message = MagicMock()
     mock_message.tool_calls = [mock_tool_call]
     mock_choice = MagicMock()

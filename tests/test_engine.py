@@ -11,7 +11,7 @@ from src.schema import IncidentReport, LogAnomaly, SeverityLevel
 
 @pytest.fixture
 def sample_raw_logs():
-# Formatted to strictly match LOG_PATTERN:
+    # Formatted to strictly match LOG_PATTERN:
     # "YYYY-MM-DD HH:MM:SS [LEVEL] STATUS LATENCYms - MESSAGE"
     return """2026-09-04 18:00:00 [INFO] 200 45ms - auth-service User login success
 2026-09-04 18:00:01 [ERROR] 500 5200ms - auth-service DB connection timeout
@@ -34,10 +34,13 @@ def mock_analyzer():
                 service_name="auth-service",
                 error_code="500",
                 message="DB connection timeout",
-                raw_log_line="2026-09-04 18:00:01 ERROR auth-service DB connection timeout"
+                raw_log_line="2026-09-04 18:00:01 ERROR auth-service DB connection timeout",
             )
         ],
-        recommended_actions=["Check database cluster status", "Restart auth-service pool"],
+        recommended_actions=[
+            "Check database cluster status",
+            "Restart auth-service pool",
+        ],
         requires_escalation=True,
     )
     analyzer.analyze_logs.return_value = mock_report
@@ -50,7 +53,7 @@ def test_engine_process_raw_logs(sample_raw_logs, mock_analyzer):
 
     # Assert analyzer received filtered logs
     mock_analyzer.analyze_logs.assert_called_once()
-    
+
     # Assert output structure
     assert "incident_report" in result
     assert "notification_payload" in result
@@ -60,7 +63,10 @@ def test_engine_process_raw_logs(sample_raw_logs, mock_analyzer):
     # Assert notification payload formatting
     payload = result["notification_payload"]
     assert payload["channel"] == "#alerts-critical"
-    assert payload["attachments"][0]["title"] == "[HIGH] Authentication Service Database Outage"
+    assert (
+        payload["attachments"][0]["title"]
+        == "[HIGH] Authentication Service Database Outage"
+    )
 
 
 def test_format_notification_payload_info_level():
@@ -73,7 +79,7 @@ def test_format_notification_payload_info_level():
         recommended_actions=["Monitor gateway latency"],
         requires_escalation=False,
     )
-    
+
     engine = IncidentTriageEngine(analyzer=MagicMock())
     payload = engine.format_notification_payload(mock_report)
 

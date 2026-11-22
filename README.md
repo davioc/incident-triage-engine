@@ -6,6 +6,8 @@
 > reports with escalation alerts, built with **FastAPI**, **HTMX**, **Tailwind CSS**,
 > **ChromaDB**, and **Pydantic**.
 
+![CI](https://github.com/davioc/incident-triage-engine/actions/workflows/main.yml/badge.svg)
+
 ---
 
 ## 📸 System UI

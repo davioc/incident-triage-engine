@@ -33,7 +33,7 @@ def test_triage_endpoint_success(mock_engine):
                 service_name="api-gateway",
                 error_code="502",
                 message="Bad Gateway",
-                raw_log_line="2026-09-04 18:00:01 [ERROR] 502 120ms - api-gateway Bad Gateway"
+                raw_log_line="2026-09-04 18:00:01 [ERROR] 502 120ms - api-gateway Bad Gateway",
             )
         ],
         recommended_actions=["Check upstream service health"],
@@ -48,16 +48,16 @@ def test_triage_endpoint_success(mock_engine):
             "total_logs_ingested": 10,
             "error_logs_analyzed": 2,
             "requires_escalation": True,
-        }
+        },
     }
 
     payload = {
         "raw_logs": "2026-09-04 18:00:01 [ERROR] 502 120ms - api-gateway Bad Gateway",
-        "max_context_lines": 20
+        "max_context_lines": 20,
     }
 
     response = client.post("/api/v1/triage", json=payload)
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["incident_report"]["incident_id"] == "INC-2026-TEST"
@@ -129,9 +129,7 @@ def test_mode_switch_openai_without_key_keeps_previous_backend():
 def test_mode_endpoint_htmx_returns_menu_fragment():
     original = restore_backend()
     try:
-        response = client.post(
-            "/api/v1/mode?mode=mock", headers={"HX-Request": "true"}
-        )
+        response = client.post("/api/v1/mode?mode=mock", headers={"HX-Request": "true"})
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
         assert "mode-control" in response.text
