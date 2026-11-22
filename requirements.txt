@@ -9,6 +9,11 @@ pydantic-settings==2.15.0
 python-dotenv==1.2.3
 openai==1.109.1
 chromadb==1.5.9                # runbook retrieval (docs/runbooks/*.md)
+sqlalchemy==2.1.9              # triage report persistence (2.0 ORM style)
+alembic==1.20.1                # schema migrations for the reports table
+psycopg[binary]==3.3.9         # Postgres driver; [binary] bundles libpq, so a
+                               # machine with no system libpq (Windows dev hosts)
+                               # can still connect. Plain psycopg cannot.
 
 # Test / tooling
 pytest==9.1.1
