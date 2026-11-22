@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Incident Triage Engine"
     TRIAGE_MODE: str = "mock"
 
+    # Single source of truth for the version shown by FastAPI, /api/v1/health and
+    # the dashboard badge. Bump the minor number for new endpoints or UI
+    # capabilities, the patch number for fixes. Screenshots are named after the
+    # release they document.
+    VERSION: str = "1.1.0"
+
     # Paths are anchored to the project root and overridable at runtime, so a container
     # can point the index at a mounted volume instead of the image's /app tree.
     # CHROMA_DB_DIR is read when the store is built, not at import time.

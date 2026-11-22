@@ -24,6 +24,12 @@ __pycache__/
 # Vector Store / Local Database
 .chroma_db
 
+# Throwaway local smoke-test scripts (kept on the machine, not part of the pytest suite)
+.probe_*.py
+
+# Model/agent notes kept outside the project (docs/ stays project-only)
+notes/
+
 # Node / Frontend Build Tools (if applicable)
 node_modules/
 .npm/

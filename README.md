@@ -10,7 +10,7 @@
 
 ## 📸 System UI
 
-![SRE Triage Dashboard](docs/images/dashboard-ui.png)
+![SRE Triage Dashboard](docs/images/dashboard-ui-ver1.1.0.png)
 *Figure 1: Real-time SRE Log Triage Dashboard rendering extracted anomalies, affected services, and recommended actions.*
 
 ---
@@ -40,9 +40,9 @@ API clients and webhooks.
 └───────────┬──────────────┘   (opt-in: engine(use_runbooks=True))
             │
             ▼
-┌──────────────────────────┐  TRIAGE_MODE Routing:
+┌──────────────────────────┐  TRIAGE_MODE Routing (switchable at runtime):
 │  Stage 4: LLM Analysis   │  ├── mock   -> Heuristic extraction, no network
-└───────────┬──────────────┘  ├── ollama -> Local Llama 3.2 (OpenAI-compatible)
+└───────────┬──────────────┘  ├── ollama -> Local Llama 3.2, json_schema decoding
             │                 └── openai -> GPT-4o tool calling
             ▼
 ┌──────────────────────────┐
@@ -60,15 +60,15 @@ validation is rejected with HTTP 502 rather than silently replaced.
 ## 🗂️ Repository Structure
 
 ```text
-src/api/routes.py     # The /api/v1 contract + HTMX HTML fragment rendering
-src/api.py            # Standalone API app (mounts that router)
-src/main.py           # Dashboard app (router + src/web/index.html at /)
-src/engine.py         # Parse -> runbook retrieval -> analyze -> alert payload
-src/llm_client.py     # mock / ollama / openai modes, schema-enforced tool calling
-src/log_parser.py     # Log line regex, metrics, synthetic log generator
-src/schema.py         # SeverityLevel, LogAnomaly, IncidentReport (Pydantic v2)
-src/vector_store.py   # ChromaDB runbook index (lazy, created on first use)
-src/web/index.html    # Dashboard UI (HTMX + Tailwind via CDN)
+src/api/routes.py   # The /api/v1 contract + HTMX HTML fragment rendering
+src/api/__init__.py # Standalone API app (mounts that router)
+src/main.py         # Dashboard app (router + src/web/index.html at /)
+src/engine.py       # Parse -> runbook retrieval -> analyze -> alert payload
+src/llm_client.py   # mock / ollama / openai modes; json_schema for Ollama, tools for OpenAI
+src/log_parser.py   # Log line regex, metrics, synthetic log generator
+src/schema.py       # SeverityLevel, LogAnomaly, IncidentReport (Pydantic v2)
+src/vector_store.py # ChromaDB runbook index (lazy, created on first use)
+src/web/index.html  # Dashboard UI (HTMX + Tailwind via CDN)
 scripts/incident_cli.py         # CLI: JSON-lines log file -> incident report
 scripts/ingest_runbooks.py      # CLI: ingest runbooks and probe similarity queries
 docs/runbooks/*.md    # Remediation runbooks indexed for retrieval
@@ -159,6 +159,8 @@ Then open <http://127.0.0.1:8000> in a browser. The application provides:
 - Health check: <http://127.0.0.1:8000/api/v1/health>
 - Interactive API documentation: <http://127.0.0.1:8000/docs>
 - Triage endpoint: `POST /api/v1/triage`
+- Analysis backend: `GET /api/v1/mode` (current backend) and `POST /api/v1/mode?mode=...`
+  (switch it for this process — see "Switching the backend at runtime")
 
 `TRIAGE_MODE` defaults to `mock` when unset, so the dashboard analyzes logs offline with
 the heuristic analyzer. Note that the committed root `.env` currently sets
@@ -209,7 +211,26 @@ For OpenAI, set `TRIAGE_MODE=openai` and provide `OPENAI_API_KEY`. For Ollama, s
 
 If a provider call fails at runtime, the engine degrades to heuristic analysis: the
 report is labelled `[DEGRADED]`, `metadata.degraded` carries the reason, and escalation
-is suppressed. Keep `.env` (and any real key) out of version control.
+is suppressed. The dashboard shows that reason above the report, plus a line naming the
+backend that answered (e.g. `Analysis: ollama · llama3.2`). Keep `.env` (and any real
+key) out of version control.
+
+### Switching the backend at runtime
+
+The dashboard's **Serving** button (left of *Analyze & Triage Payload*) toggles between
+`llama 3.2`, `Other OpenAI` and `Mock mode (default)` without editing `.env` or restarting
+the server. The same control is an ordinary API endpoint:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/mode"                      # what is active now
+curl -X POST "http://127.0.0.1:8000/api/v1/mode?mode=ollama&model=llama3.2"
+curl -X POST "http://127.0.0.1:8000/api/v1/mode?mode=mock"
+```
+
+The switch rebuilds the analyzer inside the running process only; `.env` stays the
+default, and `OLLAMA_MODEL` / `OPENAI_MODEL` still supply the model when you omit
+`model=`. Switching to `openai` without `OPENAI_API_KEY` is a `400` that leaves the
+previous backend in place rather than a silent fallback.
 
 ---
 

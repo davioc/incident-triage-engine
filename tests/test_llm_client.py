@@ -4,6 +4,7 @@ Verifies Pydantic schema validation and tool call payload parsing without live A
 """
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 import pytest
 from src.llm_client import StructuredLogAnalyzer
@@ -97,3 +98,124 @@ def test_analyze_logs_validation_error(mock_openai_class):
 
     with pytest.raises(ValueError, match="Failed to validate LLM output"):
         analyzer.analyze_logs("some random log line")
+
+
+def _text_response(content: str) -> MagicMock:
+    """Mock a completion whose report arrived as plain text instead of tool_calls."""
+    mock_message = MagicMock()
+    mock_message.tool_calls = None
+    mock_message.content = content
+
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response.choices = [mock_choice]
+    return mock_response
+
+
+@patch("src.llm_client.OpenAI")
+def test_ollama_mode_requests_json_schema(mock_openai_class):
+    """Ollama mode constrains decoding with the schema, not tool calling."""
+    payload = json.dumps(
+        {
+            "incident_id": "INC-2026-002",
+            "title": "Redis connection refused",
+            "severity": "HIGH",
+            "summary": "Auth gateway rejected tokens after Redis connection refused.",
+            "affected_services": ["auth-gateway"],
+            "anomalies": [],
+            "recommended_actions": ["Restart Redis"],
+            "requires_escalation": True,
+        }
+    )
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.return_value = _text_response(payload)
+    mock_openai_class.return_value = mock_client_instance
+
+    analyzer = StructuredLogAnalyzer(mode="ollama", model="llama3.2")
+    report = analyzer.analyze_logs(
+        "[ERROR] service=auth-gateway redis connection refused"
+    )
+
+    assert report.incident_id == "INC-2026-002"
+    kwargs = mock_client_instance.chat.completions.create.call_args.kwargs
+    assert "tools" not in kwargs
+    response_format = kwargs["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    assert "title" in response_format["json_schema"]["schema"]["properties"]
+
+
+@patch("src.llm_client.OpenAI")
+def test_ollama_base_url_is_normalized_to_v1(mock_openai_class):
+    """A bare OLLAMA_BASE_URL without /v1 would 404, so the suffix gets appended."""
+    with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://localhost:11434"}):
+        StructuredLogAnalyzer(mode="ollama")
+
+    assert mock_openai_class.call_args.kwargs["base_url"] == "http://localhost:11434/v1"
+
+
+@patch("src.llm_client.OpenAI")
+def test_analyze_logs_recovers_fenced_json_report(mock_openai_class):
+    """A fenced json report is unwrapped and still validated against the schema."""
+    payload = json.dumps(
+        {
+            "incident_id": "INC-2026-003",
+            "title": "Database pool exhausted",
+            "severity": "CRITICAL",
+            "summary": "Connection pool exhaustion caused cascading 500 errors.",
+            "affected_services": ["database-service"],
+            "anomalies": [],
+            "recommended_actions": ["Raise pool limit"],
+            "requires_escalation": True,
+        }
+    )
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.return_value = _text_response(
+        f"Here is the report:\n```json\n{payload}\n```"
+    )
+    mock_openai_class.return_value = mock_client_instance
+
+    analyzer = StructuredLogAnalyzer(mode="ollama", model="phi4-mini")
+    report = analyzer.analyze_logs("[ERROR] db pool exhausted")
+
+    assert report.severity == SeverityLevel.CRITICAL
+    assert report.title == "Database pool exhausted"
+
+
+@patch("src.llm_client.OpenAI")
+def test_analyze_logs_recovers_name_arguments_envelope(mock_openai_class):
+    """Text shaped as a name/arguments envelope is unwrapped down to the report."""
+    payload = {
+        "incident_id": "INC-2026-004",
+        "title": "Cache service unavailable",
+        "severity": "MEDIUM",
+        "summary": "Redis cache misses while cache-service was unreachable.",
+        "affected_services": ["cache-service"],
+        "anomalies": [],
+        "recommended_actions": ["Reconnect cache"],
+        "requires_escalation": False,
+    }
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.return_value = _text_response(
+        json.dumps({"name": "generate_incident_report", "arguments": payload})
+    )
+    mock_openai_class.return_value = mock_client_instance
+
+    analyzer = StructuredLogAnalyzer(mode="ollama", model="qwen2.5-coder:14b")
+    report = analyzer.analyze_logs("[ERROR] cache-service unreachable")
+
+    assert report.incident_id == "INC-2026-004"
+
+
+@patch("src.llm_client.OpenAI")
+def test_analyze_logs_refuses_empty_response(mock_openai_class):
+    """An empty answer is refused rather than filled in with heuristics."""
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.return_value = _text_response("")
+    mock_openai_class.return_value = mock_client_instance
+
+    analyzer = StructuredLogAnalyzer(mode="ollama", model="llama3.2")
+
+    with pytest.raises(ValueError, match="no generate_incident_report payload"):
+        analyzer.analyze_logs("[ERROR] something failed")
