@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.responses import HTMLResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 # Standard absolute imports using 'src.'
@@ -40,9 +40,12 @@ if WEB_DIR.exists():
 
 
 # 4. Serve index.html at the root URL
-@app.get("/", response_class=FileResponse)
+# The badge shows Settings.VERSION rather than a copy of it, so a release bump cannot
+# leave the dashboard claiming an older version than /docs reports.
+@app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
-    return FileResponse(WEB_DIR / "index.html")
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(content=html.replace("{{VERSION}}", settings.VERSION))
 
 
 if __name__ == "__main__":
