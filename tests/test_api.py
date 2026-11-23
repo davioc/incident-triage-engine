@@ -104,14 +104,18 @@ def test_mode_switch_to_mock_is_process_local():
 def test_mode_switch_names_ollama_model_and_endpoint():
     original = restore_backend()
     try:
-        response = client.post("/api/v1/mode?mode=ollama&model=llama3.2")
+        with patch("src.api.routes.ollama_model_warning", return_value=None):
+            response = client.post("/api/v1/mode?mode=ollama&model=llama3.2")
         assert response.status_code == 200
         state = response.json()
         assert state["mode"] == "ollama"
         assert state["model"] == "llama3.2"
         assert state["base_url"].endswith("/v1")
+        assert state["warning"] is None
     finally:
         routes.engine.analyzer = original
+        routes._warning_state["key"] = None
+        routes._warning_state["text"] = None
 
 
 def test_mode_switch_rejects_unknown_mode():
@@ -128,6 +132,105 @@ def test_mode_switch_openai_without_key_keeps_previous_backend():
         assert routes.engine.analyzer is original
     finally:
         routes.engine.analyzer = original
+
+
+class _FakeModel:
+    def __init__(self, model_id):
+        self.id = model_id
+
+
+class _FakeClient:
+    """Stand-in for the OpenAI client's model listing, so the probe stays offline."""
+
+    def __init__(self, ids=None, error=None):
+        self.models = self
+        self._ids = ids if ids is not None else []
+        self._error = error
+
+    def list(self, timeout=None):
+        if self._error:
+            raise self._error
+        return [_FakeModel(model_id) for model_id in self._ids]
+
+
+class _FakeAnalyzer:
+    def __init__(self, mode, model, client):
+        self.mode = mode
+        self.model = model
+        self.base_url = "http://localhost:11434/v1"
+        self.client = client
+
+
+def test_model_probe_names_the_missing_model_and_lists_what_exists():
+    analyzer = _FakeAnalyzer("ollama", "llama3.2", _FakeClient(["phi4-mini:latest"]))
+    warning = routes.ollama_model_warning(analyzer)
+    assert warning is not None
+    assert "llama3.2" in warning
+    assert "phi4-mini:latest" in warning
+    assert "ollama pull llama3.2" in warning
+
+
+def test_model_probe_accepts_a_bare_name_that_resolves_to_latest():
+    analyzer = _FakeAnalyzer("ollama", "llama3.2", _FakeClient(["llama3.2:latest"]))
+    assert routes.ollama_model_warning(analyzer) is None
+
+
+def test_model_probe_unreadable_endpoint_is_a_warning_not_an_error():
+    analyzer = _FakeAnalyzer(
+        "ollama", "llama3.2", _FakeClient(error=OSError("no route"))
+    )
+    warning = routes.ollama_model_warning(analyzer)
+    assert warning is not None
+    assert "Could not read the model list" in warning
+    assert "http://localhost:11434/v1" in warning
+
+
+def test_model_probe_empty_endpoint_names_nothing_pulled():
+    analyzer = _FakeAnalyzer("ollama", "llama3.2", _FakeClient([]))
+    warning = routes.ollama_model_warning(analyzer)
+    assert "no models pulled on it" in warning
+
+
+def test_model_probe_only_applies_to_ollama():
+    assert (
+        routes.ollama_model_warning(_FakeAnalyzer("openai", "gpt-4o", _FakeClient([])))
+        is None
+    )
+    assert (
+        routes.ollama_model_warning(_FakeAnalyzer("mock", None, _FakeClient([])))
+        is None
+    )
+
+
+def test_mode_switch_surfaces_the_model_warning_and_keeps_it_until_next_switch():
+    original = restore_backend()
+    try:
+        with patch(
+            "src.api.routes.ollama_model_warning",
+            return_value="Model 'x' is not there.",
+        ):
+            response = client.post("/api/v1/mode?mode=ollama&model=x")
+        assert response.status_code == 200
+        assert response.json()["warning"] == "Model 'x' is not there."
+        # The menu fragment renders it too, which is where the dashboard shows it.
+        with patch(
+            "src.api.routes.ollama_model_warning",
+            return_value="Model 'x' is not there.",
+        ):
+            fragment = client.post(
+                "/api/v1/mode?mode=ollama&model=x", headers={"HX-Request": "true"}
+            )
+        assert "Model &#x27;x&#x27; is not there." in fragment.text
+        assert client.get("/api/v1/mode").json()["warning"] == "Model 'x' is not there."
+
+        # A later switch replaces the warning, so a healthy backend stops showing one.
+        with patch("src.api.routes.ollama_model_warning", return_value=None):
+            client.post("/api/v1/mode?mode=mock")
+        assert client.get("/api/v1/mode").json()["warning"] is None
+    finally:
+        routes.engine.analyzer = original
+        routes._warning_state["key"] = None
+        routes._warning_state["text"] = None
 
 
 def test_mode_endpoint_htmx_returns_menu_fragment():

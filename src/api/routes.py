@@ -155,6 +155,46 @@ MENU_LABELS = {
     "mock": "Mock mode (default)",
 }
 
+# Short, because this runs on every switch and a dead endpoint should not stall the menu.
+MODEL_PROBE_TIMEOUT = 3.0
+
+
+def ollama_model_warning(analyzer: Any) -> Optional[str]:
+    """
+    Ask the Ollama endpoint which models it has, so a switch to a model that is not there
+    says so on the button instead of producing a degraded report later. A missing model is
+    a configuration mistake ('this Ollama does not have it'), which reads very differently
+    from an outage; the two look identical in a degraded summary otherwise.
+    """
+    if getattr(analyzer, "mode", None) != "ollama":
+        return None
+    model = getattr(analyzer, "model", None)
+    if not model:
+        return None
+
+    try:
+        available = [
+            m.id for m in analyzer.client.models.list(timeout=MODEL_PROBE_TIMEOUT)
+        ]
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - any transport failure is a warning, not a 500
+        return (
+            f"Could not read the model list from {getattr(analyzer, 'base_url', None)} "
+            f"({type(exc).__name__}: {exc}). The switch is still in effect."
+        )
+
+    # Ollama resolves a bare name to '<name>:latest', so either spelling is usable.
+    if model in available or f"{model}:latest" in available:
+        return None
+
+    listed = ", ".join(sorted(available)) if available else "no models pulled on it"
+    return (
+        f"Model '{model}' is not on {getattr(analyzer, 'base_url', None)}. "
+        f"It has: {listed}. Run 'ollama pull {model}' on that host, or point "
+        f"OLLAMA_BASE_URL at an Ollama that has it."
+    )
+
 
 def mode_options() -> List[Dict[str, Optional[str]]]:
     """Menu entries, resolved from the environment at request time."""
@@ -191,8 +231,22 @@ def current_mode_state() -> Dict[str, Any]:
         "model": getattr(analyzer, "model", None),
         "base_url": getattr(analyzer, "base_url", None),
         "api_key_present": bool(os.getenv("OPENAI_API_KEY")),
-        "warning": None,
+        "warning": _model_warning_for(
+            getattr(analyzer, "mode", requested), getattr(analyzer, "model", None)
+        ),
     }
+
+
+# The probe runs on a switch, not on every page load: a GET would pay the timeout on each
+# dashboard render. The result is kept so the warning survives a reload until the next switch.
+_warning_state: Dict[str, Any] = {"key": None, "text": None}
+
+
+def _model_warning_for(mode: str, model: Optional[str]) -> Optional[str]:
+    """The stored warning, but only while that same backend and model are still active."""
+    if _warning_state["text"] and _warning_state["key"] == (mode, model):
+        return _warning_state["text"]
+    return None
 
 
 def mode_label(state: Dict[str, Any]) -> str:
@@ -258,7 +312,15 @@ async def set_analysis_mode(
 
     engine.analyzer = analyzer
     state = current_mode_state()
+    # The switch succeeded either way; this only tells the operator whether the next
+    # request will actually reach a model.
+    warning = ollama_model_warning(analyzer)
+    _warning_state["key"] = (state["mode"], state["model"])
+    _warning_state["text"] = warning
+    state["warning"] = warning
     logger.info("Analysis backend switched to %s (%s)", state["mode"], state["model"])
+    if warning:
+        logger.warning("Model check after switch: %s", warning)
 
     if request.headers.get("HX-Request") == "true":
         return HTMLResponse(content=render_mode_html(state))
