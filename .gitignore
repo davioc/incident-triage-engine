@@ -27,6 +27,12 @@ __pycache__/
 # Throwaway local smoke-test scripts (kept on the machine, not part of the pytest suite)
 .probe_*.py
 
+# Coverage artifacts from a local --cov run; CI reports the table without writing a file in
+# the repository checkout that would show up as an untracked change.
+.coverage
+.coverage.*
+htmlcov/
+
 # Model/agent notes kept outside the project (docs/ stays project-only)
 notes/
 
