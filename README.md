@@ -331,10 +331,25 @@ there reach the container even though `.env` is never copied into the image. A l
 `TRIAGE_MODE=openai` with an old key makes the stack run OpenAI and return `[DEGRADED]`
 reports; start with `$env:TRIAGE_MODE="mock"` to get offline heuristic analysis.
 
-To point the app at a local Ollama (Llama 3.2, no external API), start Ollama and set:
+To point the container at an Ollama running on your host (Llama 3.2, no external API), start
+Ollama and set both variables — the default `OLLAMA_BASE_URL` names the `ollama` service, which
+is not running until the `llm` profile is:
 
 ```bash
-$env:TRIAGE_MODE="ollama"; docker compose up -d --force-recreate app
+$env:TRIAGE_MODE="ollama"; $env:OLLAMA_BASE_URL="http://host.docker.internal:11434"; docker compose up -d --force-recreate app
+```
+
+`host.docker.internal` resolves to the host from inside the container network, so the container
+reaches your local Ollama without publishing a port.
+
+The published stack and a local dev server both want port 8000. Docker relays loopback requests
+to the container, so `http://localhost:8000` reaches the container even while `uvicorn` is
+listening on the host, and the container carries its own environment (Postgres from the stack,
+no Ollama unless the profile is started). To test a host server while the stack is up, use a
+different port:
+
+```powershell
+python -m uvicorn src.main:app --port 8001
 ```
 
 The `ollama` service is defined behind a `llm` profile so the default stack stays small;
