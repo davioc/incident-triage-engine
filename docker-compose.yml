@@ -1,9 +1,10 @@
 # Docker Compose stack for the Incident Triage Engine.
 #   docker compose up          -> dashboard + API on http://localhost:8000
-#   docker compose --profile llm up   -> also runs Ollama (Llama 3.2) locally
+#   docker compose --profile llm up   -> also runs an Ollama container for the stack
 #
 # TRIAGE_MODE is read by src/config.py; it defaults to mock, so the stack runs
-# offline with no keys and no LLM container.
+# offline with no keys and no LLM container. With TRIAGE_MODE=ollama the app targets the
+# host's Ollama by default, since its volume is empty until a model is pulled into it.
 
 services:
   app:
@@ -15,12 +16,19 @@ services:
       TRIAGE_MODE: ${TRIAGE_MODE:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      # Default target is the host's Ollama, which already holds the pulled models.
+      # With --profile llm, set OLLAMA_BASE_URL=http://ollama:11434/v1 to use the
+      # in-stack service instead, and pull the model into that container first.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
       # The index lives on a named volume, not inside the image.
       CHROMA_DB_DIR: /app/.chroma_db
       # Report storage. Empty means disabled; the stack below sets a real URL.
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://triage:triage@postgres:5432/triage}
+    # Docker Desktop resolves host.docker.internal itself; host-gateway makes the same
+    # name work on a plain Docker Engine on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Persist the runbook index so ingest survives restarts. The app user owns it;
       # without this the non-root container cannot write into its own home directory.
@@ -50,8 +58,9 @@ services:
       timeout: 3s
       retries: 5
 
-  # Only started with --profile llm, or when TRIAGE_MODE=ollama pulls it in via
-  # depends_on. Set TRIAGE_MODE=ollama in .env to use it.
+  # Only started with --profile llm. Its model volume starts empty, so pull the model
+  # into it (docker exec <ollama container> ollama pull llama3.2) and point the app at
+  # this service with OLLAMA_BASE_URL=http://ollama:11434/v1.
   ollama:
     image: ollama/ollama:latest
     volumes:

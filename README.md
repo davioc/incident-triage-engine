@@ -331,16 +331,17 @@ there reach the container even though `.env` is never copied into the image. A l
 `TRIAGE_MODE=openai` with an old key makes the stack run OpenAI and return `[DEGRADED]`
 reports; start with `$env:TRIAGE_MODE="mock"` to get offline heuristic analysis.
 
-To point the container at an Ollama running on your host (Llama 3.2, no external API), start
-Ollama and set both variables — the default `OLLAMA_BASE_URL` names the `ollama` service, which
-is not running until the `llm` profile is:
+To use an Ollama running on your host (Llama 3.2, no external API), start Ollama and switch the
+mode — the container already targets the host at `host.docker.internal`:
 
 ```bash
-$env:TRIAGE_MODE="ollama"; $env:OLLAMA_BASE_URL="http://host.docker.internal:11434"; docker compose up -d --force-recreate app
+$env:TRIAGE_MODE="ollama"; docker compose up -d --force-recreate app
 ```
 
-`host.docker.internal` resolves to the host from inside the container network, so the container
-reaches your local Ollama without publishing a port.
+Changing an environment variable only takes effect when the container is recreated, so
+`--force-recreate app` is part of the command. `host.docker.internal` resolves to the host from
+inside the container network (declared as `host-gateway`, which also works on plain Docker Engine
+on Linux), so your pulled models are visible without publishing a port.
 
 The published stack and a local dev server both want port 8000. Docker relays loopback requests
 to the container, so `http://localhost:8000` reaches the container even while `uvicorn` is
@@ -352,10 +353,17 @@ different port:
 python -m uvicorn src.main:app --port 8001
 ```
 
-The `ollama` service is defined behind a `llm` profile so the default stack stays small;
-`docker compose --profile llm up -d` pulls and starts it alongside the app. The app reaches
-it over `OLLAMA_BASE_URL=http://ollama:11434/v1`, the container-network address. If Ollama
-is not answering, triage degrades to heuristics rather than failing.
+The `ollama` service is defined behind a `llm` profile so the default stack stays small. Its
+model volume starts empty, so a model has to be pulled into that container before it can answer:
+
+```bash
+docker compose --profile llm up -d
+docker exec incident-triage-engine-ollama-1 ollama pull llama3.2
+$env:TRIAGE_MODE="ollama"; $env:OLLAMA_BASE_URL="http://ollama:11434/v1"; docker compose up -d --force-recreate app
+```
+
+If Ollama is not answering, triage degrades to heuristics rather than failing, and a missing
+model says so in the degraded report with the endpoint it looked at.
 
 Useful commands:
 
