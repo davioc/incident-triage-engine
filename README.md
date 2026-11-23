@@ -154,6 +154,14 @@ without activation:
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+Coverage tooling lives in `requirements-dev.txt` so the runtime image installs
+`requirements.txt` alone:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q --cov=src --cov-report=term-missing
+```
+
 ### 4. Run the API and dashboard
 
 Start the development server:
