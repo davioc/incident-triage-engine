@@ -25,6 +25,23 @@ logger = logging.getLogger("incident-triage-engine.llm")
 # Provider-side availability problems: safe to degrade. Schema problems are not.
 TRANSPORT_ERRORS = (APIConnectionError, APITimeoutError, APIStatusError, OSError)
 
+
+def _failure_hint(
+    exc: Exception, mode: str, base_url: Optional[str], model: Optional[str]
+) -> str:
+    """
+    A 404 from Ollama means the endpoint is answering but the model is not there, which is a
+    configuration mistake rather than an outage. Say so in the degraded reason, because
+    'Connection error.'-style wording sends people looking for a dead server.
+    """
+    if mode == "ollama" and getattr(exc, "status_code", None) == 404:
+        return (
+            f"Model '{model}' is not available at {base_url}. Pull it on that host "
+            f"(ollama pull {model}) or point OLLAMA_BASE_URL at an Ollama that has it."
+        )
+    return ""
+
+
 REPORT_TOOL_NAME = "generate_incident_report"
 
 DEFAULT_ACTIONS = [
@@ -177,6 +194,9 @@ class StructuredLogAnalyzer:
             )
         except TRANSPORT_ERRORS as exc:
             reason = f"{type(exc).__name__}: {exc}"
+            hint = _failure_hint(exc, self.mode, self.base_url, self.model)
+            if hint:
+                reason = f"{reason} | {hint}"
             logger.warning(
                 "LLM call failed (%s). Falling back to local heuristic analysis.",
                 reason,
