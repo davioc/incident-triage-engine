@@ -6,7 +6,9 @@ Verifies Pydantic schema validation and tool call payload parsing without live A
 import json
 import os
 from unittest.mock import MagicMock, patch
+import httpx
 import pytest
+from openai import APIConnectionError, APIStatusError
 from src.llm_client import StructuredLogAnalyzer
 from src.schema import IncidentReport, SeverityLevel
 
@@ -219,3 +221,52 @@ def test_analyze_logs_refuses_empty_response(mock_openai_class):
 
     with pytest.raises(ValueError, match="no generate_incident_report payload"):
         analyzer.analyze_logs("[ERROR] something failed")
+
+
+OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
+
+
+def _connection_error() -> APIConnectionError:
+    """The endpoint is not answering at all, which reads as a dead server."""
+    return APIConnectionError(
+        message="Connection error.", request=httpx.Request("POST", OLLAMA_URL)
+    )
+
+
+def _model_missing_error() -> APIStatusError:
+    """The endpoint answered, but the requested model is not in its model store."""
+    request = httpx.Request("POST", OLLAMA_URL)
+    response = httpx.Response(status_code=404, request=request)
+    return APIStatusError(
+        "Error code: 404 - model 'llama3.2' not found", response=response, body=None
+    )
+
+
+@patch("src.llm_client.OpenAI")
+def test_transport_failure_degrades_without_a_model_hint(mock_openai_class):
+    """An unreachable endpoint degrades to heuristics and suppresses escalation."""
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.side_effect = _connection_error()
+    mock_openai_class.return_value = mock_client_instance
+
+    analyzer = StructuredLogAnalyzer(mode="ollama", model="llama3.2")
+    report = analyzer.analyze_logs("[ERROR] service=database-service timeout 500")
+
+    assert report.requires_escalation is False
+    assert report.summary.startswith("[DEGRADED] LLM unavailable (APIConnectionError")
+    assert "ollama pull" not in analyzer.degraded_reason
+
+
+@patch("src.llm_client.OpenAI")
+def test_missing_model_404_names_the_fix_in_the_degraded_reason(mock_openai_class):
+    """A 404 means the endpoint is alive and the model is absent, so say which to change."""
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.side_effect = _model_missing_error()
+    mock_openai_class.return_value = mock_client_instance
+
+    analyzer = StructuredLogAnalyzer(mode="ollama", model="llama3.2")
+    report = analyzer.analyze_logs("[ERROR] service=database-service timeout 500")
+
+    assert report.requires_escalation is False
+    assert "ollama pull llama3.2" in analyzer.degraded_reason
+    assert "http://localhost:11434/v1" in analyzer.degraded_reason

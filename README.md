@@ -70,13 +70,19 @@ src/llm_client.py   # mock / ollama / openai modes; json_schema for Ollama, tool
 src/log_parser.py   # Log line regex, metrics, synthetic log generator
 src/schema.py       # SeverityLevel, LogAnomaly, IncidentReport (Pydantic v2)
 src/vector_store.py # ChromaDB runbook index (lazy, created on first use)
+src/db/models.py    # triage_reports table (SQLAlchemy 2.0, generic column types)
+src/db/session.py   # engine + session scope; DATABASE_URL decides enabled/disabled
+src/db/repository.py# save / get / list / delete for stored reports
+alembic/            # Schema migrations; the URL comes from DATABASE_URL, like the app
+alembic.ini         # Migration settings; deliberately carries no database URL
 src/web/index.html  # Dashboard UI (HTMX + Tailwind via CDN)
 scripts/incident_cli.py         # CLI: JSON-lines log file -> incident report
 scripts/ingest_runbooks.py      # CLI: ingest runbooks and probe similarity queries
 docs/runbooks/*.md    # Remediation runbooks indexed for retrieval
-tests/                # pytest suite (parser, schema, llm client, engine, api, cli)
+docs/adr/             # Architecture decision records (pipeline, database choice)
+tests/                # pytest suite (parser, schema, llm client, engine, api, cli, db)
 Dockerfile            # API + dashboard image (non-root, ONNX model pre-warmed)
-docker-compose.yml    # app + optional Ollama profile + ChromaDB volume
+docker-compose.yml    # app + Postgres + optional Ollama profile + data volumes
 setup.cfg             # flake8 settings aligned with black's 88-char limit
 ```
 
@@ -88,6 +94,7 @@ setup.cfg             # flake8 settings aligned with black's 88-char limit
 - **Frontend:** HTMX + Tailwind CSS (CDN), server-rendered HTML fragments
 - **Retrieval:** ChromaDB with the default local embedding function (CPU)
 - **AI / LLM Integration:** OpenAI API (`gpt-4o`), Ollama (Llama 3.2), heuristic fallback
+- **Persistence:** PostgreSQL via SQLAlchemy 2.0 + Alembic; SQLite as the test double
 
 ---
 
@@ -147,6 +154,14 @@ without activation:
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+Coverage tooling lives in `requirements-dev.txt` so the runtime image installs
+`requirements.txt` alone:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q --cov=src --cov-report=term-missing
+```
+
 ### 4. Run the API and dashboard
 
 Start the development server:
@@ -163,6 +178,8 @@ Then open <http://127.0.0.1:8000> in a browser. The application provides:
 - Triage endpoint: `POST /api/v1/triage`
 - Analysis backend: `GET /api/v1/mode` (current backend) and `POST /api/v1/mode?mode=...`
   (switch it for this process — see "Switching the backend at runtime")
+- Stored reports: `GET /api/v1/reports`, `GET /api/v1/reports/{id}`,
+  `DELETE /api/v1/reports/{id}` — see "Store triage reports"
 
 `TRIAGE_MODE` defaults to `mock` when unset, so the dashboard analyzes logs offline with
 the heuristic analyzer. Note that the committed root `.env` currently sets
@@ -181,7 +198,33 @@ python scripts/ingest_runbooks.py
 The database lives in `.chroma_db/` (created automatically). Tests and `run_triage.py`
 leave retrieval off, so the suite stays fast and offline.
 
-### 6. Run the command-line demo
+### 6. Store triage reports (optional)
+
+Report storage is opt-in. With `DATABASE_URL` unset the stack behaves exactly as before
+and the report endpoints answer **503** with the reason, which is deliberately different
+from the **404** an unknown report id gets. Set a URL to enable it:
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://triage:triage@localhost:5432/triage"
+python -m alembic upgrade head    # the app never migrates itself outside the container
+python -m uvicorn src.main:app
+```
+
+Every triage then writes a row, and the response says whether it landed:
+`metadata.storage` is `{"enabled": true, "stored": true, "report_id": "..."}`. A database
+that cannot be reached never changes the analysis — the report still comes back and
+`metadata.storage.stored` is `false` alongside the error.
+
+- `GET /api/v1/reports?limit=50&severity=HIGH` — newest first, short form
+- `GET /api/v1/reports/{id}` — the validated report plus provenance (mode, model,
+  degraded reason, raw log, unparseable line count)
+- `DELETE /api/v1/reports/{id}` — drop one report
+
+For a quick local look without Postgres, point it at a file:
+`$env:DATABASE_URL = "sqlite:///./reports.db"`. The test suite uses in-memory SQLite so it
+needs no database service — see `docs/adr/0002-database-selection.md`.
+
+### 7. Run the command-line demo
 
 In a second terminal, activate the same virtual environment and run:
 
@@ -190,7 +233,17 @@ python run_triage.py            # synthetic logs through a mocked analyzer
 python scripts/incident_cli.py path/to/logs.jsonl   # one JSON object per line
 ```
 
-### 7. Run the tests
+The CLI runs the same pipeline as the API and prints the report, then the metadata:
+
+```bash
+python scripts/incident_cli.py logs.jsonl --mode ollama --model llama3.2 --runbooks
+```
+
+Exit codes: `0` success, `1` unreadable or empty log file or an unusable backend,
+`2` analyzer output that failed schema validation (the API answers 502 for the same case).
+Storage is the API's job, so the CLI never writes to the database.
+
+### 8. Run the tests
 
 ```bash
 python -m pytest
@@ -254,7 +307,15 @@ Then open <http://localhost:8000>. The image is built from `Dockerfile` and:
   empty index would return zero matches (upsert is idempotent, so restarting re-ingests);
 - persists the index in a named volume (`CHROMA_DB_DIR=/app/.chroma_db`) rather than
   inside the image;
+- applies Alembic migrations before serving when `DATABASE_URL` is set, and stops the
+  container if a migration fails rather than storing reports in a mismatched schema;
 - runs as a non-root user and reports readiness through `/api/v1/health`.
+
+The stack also starts `postgres:16-alpine`, and the app points at it by default with
+`DATABASE_URL=postgresql+psycopg://triage:triage@postgres:5432/triage`, so report storage
+is on in the container and off when you run locally without a database. Those credentials
+are development defaults; override `POSTGRES_PASSWORD` for anything real, and set
+`DATABASE_URL=` (empty) to run the container with storage disabled.
 
 `TRIAGE_MODE` defaults to `mock`, so the stack needs no API key. To use OpenAI, pass the
 key through the environment instead of editing the image:
@@ -265,22 +326,50 @@ docker compose up --build -d
 $env:TRIAGE_MODE="openai"; $env:OPENAI_API_KEY="sk-..."; docker compose up --build -d
 ```
 
-To point the app at a local Ollama (Llama 3.2, no external API), start Ollama and set:
+Note that Compose resolves `${...}` from your shell **and** the project `.env`, so values
+there reach the container even though `.env` is never copied into the image. A leftover
+`TRIAGE_MODE=openai` with an old key makes the stack run OpenAI and return `[DEGRADED]`
+reports; start with `$env:TRIAGE_MODE="mock"` to get offline heuristic analysis.
+
+To use an Ollama running on your host (Llama 3.2, no external API), start Ollama and switch the
+mode — the container already targets the host at `host.docker.internal`:
 
 ```bash
 $env:TRIAGE_MODE="ollama"; docker compose up -d --force-recreate app
 ```
 
-The `ollama` service is defined behind a `llm` profile so the default stack stays small;
-`docker compose --profile llm up -d` pulls and starts it alongside the app. The app reaches
-it over `OLLAMA_BASE_URL=http://ollama:11434/v1`, the container-network address. If Ollama
-is not answering, triage degrades to heuristics rather than failing.
+Changing an environment variable only takes effect when the container is recreated, so
+`--force-recreate app` is part of the command. `host.docker.internal` resolves to the host from
+inside the container network (declared as `host-gateway`, which also works on plain Docker Engine
+on Linux), so your pulled models are visible without publishing a port.
+
+The published stack and a local dev server both want port 8000. Docker relays loopback requests
+to the container, so `http://localhost:8000` reaches the container even while `uvicorn` is
+listening on the host, and the container carries its own environment (Postgres from the stack,
+no Ollama unless the profile is started). To test a host server while the stack is up, use a
+different port:
+
+```powershell
+python -m uvicorn src.main:app --port 8001
+```
+
+The `ollama` service is defined behind a `llm` profile so the default stack stays small. Its
+model volume starts empty, so a model has to be pulled into that container before it can answer:
+
+```bash
+docker compose --profile llm up -d
+docker exec incident-triage-engine-ollama-1 ollama pull llama3.2
+$env:TRIAGE_MODE="ollama"; $env:OLLAMA_BASE_URL="http://ollama:11434/v1"; docker compose up -d --force-recreate app
+```
+
+If Ollama is not answering, triage degrades to heuristics rather than failing, and a missing
+model says so in the degraded report with the endpoint it looked at.
 
 Useful commands:
 
 ```bash
 docker compose ps        # status and health
 docker compose logs app  # ingest output + uvicorn logs
-docker compose down      # stop; the volume keeps the index
-docker compose down -v   # stop and delete the index
+docker compose down      # stop; the volumes keep the index and stored reports
+docker compose down -v   # stop and delete the index and the database
 ```

@@ -13,13 +13,18 @@ class Settings(BaseSettings):
     # the dashboard badge. Bump the minor number for new endpoints or UI
     # capabilities, the patch number for fixes. Screenshots are named after the
     # release they document.
-    VERSION: str = "1.1.0"
+    VERSION: str = "1.2.0"
 
     # Paths are anchored to the project root and overridable at runtime, so a container
     # can point the index at a mounted volume instead of the image's /app tree.
     # CHROMA_DB_DIR is read when the store is built, not at import time.
     RUNBOOKS_DIR: Path = BASE_DIR / "docs" / "runbooks"
     CHROMA_DB_DIR: Path = BASE_DIR / ".chroma_db"
+
+    # Report storage is opt-in: an empty value means storage is disabled rather than
+    # a half-configured database. Compose sets a postgres URL; local runs without a
+    # database keep working offline. See docs/adr/0002-database-selection.md.
+    DATABASE_URL: str = ""
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

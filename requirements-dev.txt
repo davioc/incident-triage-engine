@@ -1,0 +1,2 @@
+# Development-only dependencies. The runtime image installs requirements.txt alone.
+pytest-cov==7.1.0

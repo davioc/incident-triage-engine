@@ -8,17 +8,27 @@ implementation of each endpoint.
 import html
 import logging
 import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import settings
+from src.db import (
+    delete_report,
+    get_report,
+    list_reports,
+    save_report,
+    storage_enabled,
+    storage_state,
+)
 from src.engine import IncidentTriageEngine
 from src.llm_client import StructuredLogAnalyzer
-from src.schema import IncidentReport
+from src.schema import IncidentReport, SeverityLevel
 
 logger = logging.getLogger("incident-triage-engine.api")
 
@@ -57,6 +67,82 @@ class TriageResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
+class ReportSummary(BaseModel):
+    """Listing entry: enough to identify a stored report without its payload."""
+
+    id: str
+    incident_id: str
+    title: str
+    severity: str
+    requires_escalation: bool
+    analysis_mode: Optional[str] = None
+    model: Optional[str] = None
+    degraded: Optional[str] = None
+    created_at: datetime
+
+
+class ReportListResponse(BaseModel):
+    reports: List[ReportSummary]
+    storage: Dict[str, Any]
+
+
+class StoredReport(BaseModel):
+    """A report read back from storage, with the provenance it was stored with."""
+
+    id: str
+    incident_id: str
+    title: str
+    severity: str
+    summary: str
+    requires_escalation: bool
+    analysis_mode: Optional[str] = None
+    model: Optional[str] = None
+    degraded: Optional[str] = None
+    unparseable_lines: int = 0
+    created_at: datetime
+    report: Dict[str, Any]
+    metadata: Dict[str, Any]
+    raw_log: Optional[str] = None
+
+
+def persist_report(results: Dict[str, Any], raw_logs: str) -> Dict[str, Any]:
+    """
+    Store the triage result, and report what storage did.
+
+    A storage failure never changes the analysis: the report is returned with the
+    failure named in metadata.storage instead of the request turning into a 500.
+    """
+    if not storage_enabled():
+        return {"enabled": False, "stored": False}
+
+    try:
+        report_id = save_report(results, raw_log=raw_logs)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        logger.warning("Report storage failed: %s", exc)
+        return {"enabled": True, "stored": False, "error": str(exc)}
+
+    return {"enabled": True, "stored": True, "report_id": report_id}
+
+
+def require_storage() -> Dict[str, Any]:
+    """
+    Fail loudly when a reports endpoint is called with storage disabled. "Not
+    configured" must not be mistaken for "no such report".
+    """
+    if not storage_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=storage_state()["reason"],
+        )
+    return storage_state()
+
+
+def checked_query(value: Optional[str], message: str) -> None:
+    """Reject a filter that cannot match anything instead of silently returning []."""
+    if value is not None and value not in {s.value for s in SeverityLevel}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+
 # --- Runtime analysis-backend switching -------------------------------------------
 # The dashboard offers these three choices; a curl/CI caller may pass any model name
 # Ollama has pulled. Env vars still set the *default*, but a switch lives only in this
@@ -68,6 +154,46 @@ MENU_LABELS = {
     "openai": "Other OpenAI",
     "mock": "Mock mode (default)",
 }
+
+# Short, because this runs on every switch and a dead endpoint should not stall the menu.
+MODEL_PROBE_TIMEOUT = 3.0
+
+
+def ollama_model_warning(analyzer: Any) -> Optional[str]:
+    """
+    Ask the Ollama endpoint which models it has, so a switch to a model that is not there
+    says so on the button instead of producing a degraded report later. A missing model is
+    a configuration mistake ('this Ollama does not have it'), which reads very differently
+    from an outage; the two look identical in a degraded summary otherwise.
+    """
+    if getattr(analyzer, "mode", None) != "ollama":
+        return None
+    model = getattr(analyzer, "model", None)
+    if not model:
+        return None
+
+    try:
+        available = [
+            m.id for m in analyzer.client.models.list(timeout=MODEL_PROBE_TIMEOUT)
+        ]
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - any transport failure is a warning, not a 500
+        return (
+            f"Could not read the model list from {getattr(analyzer, 'base_url', None)} "
+            f"({type(exc).__name__}: {exc}). The switch is still in effect."
+        )
+
+    # Ollama resolves a bare name to '<name>:latest', so either spelling is usable.
+    if model in available or f"{model}:latest" in available:
+        return None
+
+    listed = ", ".join(sorted(available)) if available else "no models pulled on it"
+    return (
+        f"Model '{model}' is not on {getattr(analyzer, 'base_url', None)}. "
+        f"It has: {listed}. Run 'ollama pull {model}' on that host, or point "
+        f"OLLAMA_BASE_URL at an Ollama that has it."
+    )
 
 
 def mode_options() -> List[Dict[str, Optional[str]]]:
@@ -105,8 +231,22 @@ def current_mode_state() -> Dict[str, Any]:
         "model": getattr(analyzer, "model", None),
         "base_url": getattr(analyzer, "base_url", None),
         "api_key_present": bool(os.getenv("OPENAI_API_KEY")),
-        "warning": None,
+        "warning": _model_warning_for(
+            getattr(analyzer, "mode", requested), getattr(analyzer, "model", None)
+        ),
     }
+
+
+# The probe runs on a switch, not on every page load: a GET would pay the timeout on each
+# dashboard render. The result is kept so the warning survives a reload until the next switch.
+_warning_state: Dict[str, Any] = {"key": None, "text": None}
+
+
+def _model_warning_for(mode: str, model: Optional[str]) -> Optional[str]:
+    """The stored warning, but only while that same backend and model are still active."""
+    if _warning_state["text"] and _warning_state["key"] == (mode, model):
+        return _warning_state["text"]
+    return None
 
 
 def mode_label(state: Dict[str, Any]) -> str:
@@ -172,7 +312,15 @@ async def set_analysis_mode(
 
     engine.analyzer = analyzer
     state = current_mode_state()
+    # The switch succeeded either way; this only tells the operator whether the next
+    # request will actually reach a model.
+    warning = ollama_model_warning(analyzer)
+    _warning_state["key"] = (state["mode"], state["model"])
+    _warning_state["text"] = warning
+    state["warning"] = warning
     logger.info("Analysis backend switched to %s (%s)", state["mode"], state["model"])
+    if warning:
+        logger.warning("Model check after switch: %s", warning)
 
     if request.headers.get("HX-Request") == "true":
         return HTMLResponse(content=render_mode_html(state))
@@ -180,12 +328,17 @@ async def set_analysis_mode(
 
 
 @router.get("/api/v1/health", status_code=status.HTTP_200_OK)
-async def health_check() -> Dict[str, str]:
-    """Health check endpoint for monitoring API and service availability."""
+async def health_check() -> Dict[str, Any]:
+    """
+    Health check endpoint for monitoring API and service availability. Reports the
+    storage configuration too, so an operator can tell disabled storage apart from a
+    database that is configured but unreachable.
+    """
     return {
         "status": "healthy",
         "service": "incident-triage-engine",
         "version": settings.VERSION,
+        "storage": storage_state(),
     }
 
 
@@ -236,19 +389,121 @@ async def triage_logs(
         ) from exc
 
     metadata = results["metadata"]
+    metadata["storage"] = persist_report(results, payload.raw_logs)
     logger.debug(
-        "Triage %s: %d logs ingested, %d error logs, %d unparseable, degraded=%s",
+        "Triage %s: %d logs ingested, %d error logs, %d unparseable, degraded=%s, "
+        "stored=%s",
         results["incident_report"].get("incident_id"),
         metadata.get("total_logs_ingested"),
         metadata.get("error_logs_analyzed"),
         metadata.get("unparseable_lines"),
         metadata.get("degraded"),
+        metadata["storage"].get("stored"),
     )
 
     if request.headers.get("HX-Request") == "true":
         return HTMLResponse(content=render_triage_html(results))
 
     return JSONResponse(content=results)
+
+
+@router.get(
+    "/api/v1/reports",
+    summary="List stored triage reports, newest first",
+    response_model=ReportListResponse,
+    responses={
+        400: {"description": "severity is not one of the IncidentReport levels"},
+        503: {"description": "Report storage is disabled (DATABASE_URL unset)"},
+    },
+)
+async def list_stored_reports(
+    limit: int = Query(
+        50, ge=1, le=200, description="Maximum reports to return in short form."
+    ),
+    severity: Optional[str] = Query(
+        None, description="Filter by severity level, e.g. CRITICAL."
+    ),
+) -> Dict[str, Any]:
+    """Short listing of stored reports; full payloads come from the report endpoint."""
+    storage = require_storage()
+    checked_query(
+        severity,
+        f"Unknown severity '{severity}'. Expected one of: "
+        f"{', '.join(s.value for s in SeverityLevel)}.",
+    )
+
+    try:
+        reports = list_reports(limit=limit, severity=severity)
+    except SQLAlchemyError as exc:
+        logger.warning("Report listing failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Report storage is unreachable: {exc}",
+        ) from exc
+
+    return {"reports": reports, "storage": storage}
+
+
+@router.get(
+    "/api/v1/reports/{report_id}",
+    summary="Read one stored triage report",
+    response_model=StoredReport,
+    responses={
+        404: {"description": "No report stored under this id"},
+        503: {"description": "Report storage is disabled (DATABASE_URL unset)"},
+    },
+)
+async def get_stored_report(report_id: str) -> Dict[str, Any]:
+    """The stored report plus the mode, model and degraded reason it was produced with."""
+    require_storage()
+
+    try:
+        stored = get_report(report_id)
+    except SQLAlchemyError as exc:
+        logger.warning("Report read failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Report storage is unreachable: {exc}",
+        ) from exc
+
+    if stored is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No triage report stored with id '{report_id}'.",
+        )
+
+    return stored
+
+
+@router.delete(
+    "/api/v1/reports/{report_id}",
+    summary="Delete a stored triage report",
+    responses={
+        404: {"description": "No report stored under this id"},
+        503: {"description": "Report storage is disabled (DATABASE_URL unset)"},
+    },
+)
+async def delete_stored_report(report_id: str) -> Dict[str, Any]:
+    """Remove a stored report. Deletion is idempotent only in the sense that a second
+    delete reports 404 rather than pretending the row still existed."""
+    require_storage()
+
+    try:
+        removed = delete_report(report_id)
+    except SQLAlchemyError as exc:
+        logger.warning("Report delete failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Report storage is unreachable: {exc}",
+        ) from exc
+
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No triage report stored with id '{report_id}'.",
+        )
+
+    return {"deleted": report_id, "storage": storage_state()}
 
 
 def _esc(value: Any) -> str:
