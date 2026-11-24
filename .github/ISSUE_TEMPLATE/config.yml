@@ -1,0 +1,6 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: Pipeline architecture decision
+    url: https://github.com/davioc/incident-triage-engine/blob/main/docs/adr/0001-pipeline-architecture.md
+    about: The constraints the design was built around, and what is deliberately not implemented.
