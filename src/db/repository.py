@@ -6,7 +6,7 @@ at a different database without mutating global configuration.
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import make_url, select
+from sqlalchemy import func, make_url, select
 
 from src.config import settings
 from src.db.models import TriageReportRow
@@ -96,6 +96,23 @@ def list_reports(
 
     with session_scope(url) as session:
         return [row.summary_dict() for row in session.scalars(statement).all()]
+
+
+def report_counts(url: Optional[str] = None) -> Dict[str, Any]:
+    """How many reports are stored, and how many were produced by a degraded analysis.
+
+    Counts rather than rows: the dashboard chip needs a number without pulling every
+    payload off the database.
+    """
+    with session_scope(url) as session:
+        total = session.scalar(select(func.count()).select_from(TriageReportRow))
+        degraded = session.scalar(
+            select(func.count())
+            .select_from(TriageReportRow)
+            .where(TriageReportRow.degraded_reason.is_not(None))
+        )
+
+    return {"total": int(total or 0), "degraded": int(degraded or 0)}
 
 
 def delete_report(report_id: str, url: Optional[str] = None) -> bool:

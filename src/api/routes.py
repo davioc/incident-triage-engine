@@ -22,6 +22,7 @@ from src.db import (
     delete_report,
     get_report,
     list_reports,
+    report_counts,
     save_report,
     storage_enabled,
     storage_state,
@@ -445,6 +446,75 @@ async def list_stored_reports(
 
 
 @router.get(
+    "/api/v1/reports/summary",
+    summary="Storage status for the dashboard: counts plus the newest stored reports",
+    response_model=None,
+    responses={
+        200: {"description": "JSON summary, or the dashboard notice fragment"},
+        503: {"description": "Report storage is configured but unreachable"},
+    },
+)
+async def reports_summary(
+    request: Request,
+    limit: int = Query(
+        5,
+        ge=1,
+        le=20,
+        description="How many recent reports to include beside the counts.",
+    ),
+) -> Union[HTMLResponse, JSONResponse]:
+    """The state the dashboard chip needs: whether anything is being kept, how many
+    rows exist, and how many of them came out of a degraded analysis.
+
+    Unlike ``/api/v1/reports``, this answers 200 when storage is disabled and names the
+    reason. Its job is to report a state, not to list rows that do not exist; the listing
+    endpoint keeps returning 503 so "not configured" stays distinguishable from "empty".
+    """
+    state = storage_state()
+
+    if not state["enabled"]:
+        payload = {
+            "enabled": False,
+            "total": 0,
+            "degraded": 0,
+            "reports": [],
+            "storage": state,
+        }
+        if request.headers.get("HX-Request") == "true":
+            return HTMLResponse(content=render_storage_status_html(payload))
+        return JSONResponse(content=payload)
+
+    try:
+        counts = report_counts()
+        # ``JSONResponse`` serializes with ``json.dumps``, which has no datetime
+        # encoder; the timestamp is turned into the display form here so JSON and the
+        # fragment carry the same string.
+        recent = [
+            {**row, "created_at": _stamp(row.get("created_at"))}
+            for row in list_reports(limit=limit)
+        ]
+    except SQLAlchemyError as exc:
+        logger.warning("Report summary failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Report storage is unreachable: {exc}",
+        ) from exc
+
+    payload = {
+        "enabled": True,
+        "total": counts["total"],
+        "degraded": counts["degraded"],
+        "reports": recent,
+        "storage": state,
+    }
+
+    if request.headers.get("HX-Request") == "true":
+        return HTMLResponse(content=render_storage_status_html(payload))
+
+    return JSONResponse(content=payload)
+
+
+@router.get(
     "/api/v1/reports/{report_id}",
     summary="Read one stored triage report",
     response_model=StoredReport,
@@ -578,6 +648,93 @@ def render_mode_html(state: Dict[str, Any]) -> str:
     """
 
 
+SEVERITY_CHIP_CLASSES = {
+    "CRITICAL": "text-rose-400 border-rose-500/30 bg-rose-500/10",
+    "HIGH": "text-amber-400 border-amber-500/30 bg-amber-500/10",
+    "MEDIUM": "text-yellow-400 border-yellow-500/30 bg-yellow-500/10",
+    "LOW": "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    "INFO": "text-slate-400 border-slate-700 bg-slate-900",
+}
+
+
+def _stamp(value: Any) -> str:
+    """Short timestamp for the recent-reports list; the database stores UTC."""
+    if value is None:
+        return ""
+    label = (
+        value.strftime("%Y-%m-%d %H:%M") if hasattr(value, "strftime") else str(value)
+    )
+    return f"{label} UTC" if getattr(value, "tzinfo", None) else label
+
+
+def render_storage_status_html(payload: Dict[str, Any]) -> str:
+    """The stored-report notice: a count chip plus the newest reports beside it.
+
+    The root keeps ``id="storage-status"`` so the dashboard can refresh this fragment
+    after an analysis swaps a new report in.
+    """
+    if not payload["enabled"]:
+        reason = _esc(
+            payload["storage"].get("reason") or "report storage is unavailable"
+        )
+        return (
+            '<div id="storage-status" class="rounded-lg border border-amber-700/40 '
+            'bg-amber-900/20 px-3 py-2 mb-4 flex items-center justify-between gap-3">'
+            '<span class="text-xs uppercase tracking-wider text-amber-200">'
+            "No report history</span>"
+            f'<span class="text-xs font-mono text-amber-300 break-all">'
+            f"Not stored: {reason}</span></div>"
+        )
+
+    degraded = int(payload["degraded"])
+    degraded_note = (
+        f'<span class="text-amber-400">{degraded} degraded</span>'
+        if degraded
+        else '<span class="text-slate-500">none degraded</span>'
+    )
+
+    rows: List[str] = []
+    for entry in payload["reports"]:
+        severity = _esc(str(entry.get("severity", "LOW")).upper())
+        chip_class = SEVERITY_CHIP_CLASSES.get(
+            severity, "text-slate-400 border-slate-700 bg-slate-900"
+        )
+        origin = _esc(entry.get("analysis_mode") or "unknown backend")
+        if entry.get("model"):
+            origin += f" &middot; {_esc(entry['model'])}"
+        if entry.get("degraded"):
+            origin += ' <span class="text-amber-400">degraded</span>'
+
+        rows.append(
+            '<div class="flex items-center justify-between gap-3 py-1 text-xs">'
+            '<span class="flex items-center gap-2 min-w-0">'
+            f'<span class="px-1.5 py-0.5 rounded border text-[10px] font-medium '
+            f'{chip_class} shrink-0">{severity}</span>'
+            f'<a class="text-slate-200 hover:text-sky-300 truncate" target="_blank" '
+            f'href="/api/v1/reports/{_esc(entry.get("id", ""))}">'
+            f'{_esc(entry.get("title", "Untitled report"))}</a></span>'
+            f'<span class="font-mono text-[10px] text-slate-500 shrink-0">'
+            f"{origin} &middot; {_stamp(entry.get('created_at'))}</span></div>"
+        )
+
+    body = "".join(rows) or (
+        '<p class="text-xs text-slate-500">Nothing stored yet. An analysis writes a row '
+        "while storage is enabled.</p>"
+    )
+
+    return (
+        '<div id="storage-status" class="border-b border-slate-800 pb-3 mb-4">'
+        '<div class="flex items-center justify-between gap-3 mb-2">'
+        '<span class="text-xs uppercase tracking-wider text-slate-400">'
+        "Stored reports</span>"
+        f'<span class="text-xs text-slate-300">{int(payload["total"])} stored '
+        f"&middot; {degraded_note} &middot; "
+        '<a class="text-sky-400 underline decoration-slate-600" target="_blank" '
+        'href="/api/v1/reports">all</a></span></div>'
+        f"{body}</div>"
+    )
+
+
 def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
     # Metrics ride alongside the report in the results dict; keep them before unwrapping.
     meta = report.get("metadata", {}) if isinstance(report, dict) else {}
@@ -609,14 +766,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
     actions: List[str] = get_val(report, "recommended_actions", [])
     requires_escalation = get_val(report, "requires_escalation", True)
 
-    severity_colors = {
-        "CRITICAL": "text-rose-400 border-rose-500/30 bg-rose-500/10",
-        "HIGH": "text-amber-400 border-amber-500/30 bg-amber-500/10",
-        "MEDIUM": "text-yellow-400 border-yellow-500/30 bg-yellow-500/10",
-        "LOW": "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
-        "INFO": "text-slate-400 border-slate-700 bg-slate-900",
-    }
-    sev_class = severity_colors.get(
+    sev_class = SEVERITY_CHIP_CLASSES.get(
         severity, "text-slate-400 border-slate-700 bg-slate-900"
     )
 

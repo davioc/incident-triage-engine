@@ -26,3 +26,12 @@ def test_dashboard_keeps_the_triage_controls():
     html = client.get("/").text
     assert "/api/v1/triage" in html
     assert "Analyze" in html
+
+
+def test_dashboard_wires_the_stored_report_notice():
+    """The notice fills itself from /api/v1/reports/summary on load and after a triage,
+    so the page must carry the hook rather than a hardcoded count."""
+    html = client.get("/").text
+    assert 'id="storage-status"' in html
+    assert 'hx-get="/api/v1/reports/summary"' in html
+    assert "storage-refresh" in html
