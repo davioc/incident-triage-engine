@@ -426,3 +426,66 @@ def test_triage_survives_a_storage_failure(mock_engine):
     finally:
         settings.DATABASE_URL = original
         reset_engine()
+
+
+# --- Provenance on the dashboard fragment -------------------------------------------
+
+DASHBOARD_HEADERS = {"HX-Request": "true", "HX-Current-URL": "http://localhost:8000/"}
+SAMPLE_LOGS = "2026-09-04 18:00:01 [ERROR] 502 120ms - gateway Bad Gateway"
+
+
+@patch("src.api.routes.engine")
+def test_dashboard_fragment_links_the_stored_report(mock_engine, storage):
+    """The report id is only useful on the dashboard if the fragment carries it."""
+    mock_engine.process_raw_logs.return_value = stub_triage_result()
+    fragment = client.post(
+        "/api/v1/triage", json={"raw_logs": SAMPLE_LOGS}, headers=DASHBOARD_HEADERS
+    )
+    assert fragment.status_code == 200
+
+    stored_id = client.get("/api/v1/reports").json()["reports"][0]["id"]
+    assert f'href="/api/v1/reports/{stored_id}"' in fragment.text
+    assert "Stored" in fragment.text
+    assert "Analysis: mock" in fragment.text
+
+
+@patch("src.api.routes.engine")
+def test_dashboard_fragment_names_why_nothing_was_stored(mock_engine):
+    """Disabled storage is a reason, not an absence: the fragment has to say so."""
+    mock_engine.process_raw_logs.return_value = stub_triage_result()
+    fragment = client.post(
+        "/api/v1/triage", json={"raw_logs": SAMPLE_LOGS}, headers=DASHBOARD_HEADERS
+    )
+    assert "Not stored" in fragment.text
+    assert "DATABASE_URL" in fragment.text
+    assert client.get("/api/v1/reports").status_code == 503
+
+
+@patch("src.api.routes.engine")
+def test_dashboard_fragment_names_a_storage_failure(mock_engine):
+    """A configured database that cannot be written to still returns the analysis."""
+    original = settings.DATABASE_URL
+    settings.DATABASE_URL = UNREACHABLE_URL
+    reset_engine()
+    mock_engine.process_raw_logs.return_value = stub_triage_result()
+    try:
+        fragment = client.post(
+            "/api/v1/triage", json={"raw_logs": SAMPLE_LOGS}, headers=DASHBOARD_HEADERS
+        )
+        assert fragment.status_code == 200
+        assert "Not stored" in fragment.text
+    finally:
+        settings.DATABASE_URL = original
+        reset_engine()
+
+
+@patch("src.api.routes.engine")
+def test_json_triage_reports_the_disabled_storage_reason(mock_engine):
+    """JSON consumers get the same reason the dashboard shows."""
+    mock_engine.process_raw_logs.return_value = stub_triage_result()
+    body = client.post("/api/v1/triage", json={"raw_logs": SAMPLE_LOGS}).json()
+    assert body["metadata"]["storage"] == {
+        "enabled": False,
+        "stored": False,
+        "reason": "DATABASE_URL is not set; report storage is disabled",
+    }
