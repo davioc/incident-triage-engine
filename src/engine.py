@@ -1,6 +1,6 @@
 """
-Incident Triage Engine orchestrating log parsing, runbook retrieval, structured
-LLM analysis, and notification routing for automated SRE incident response.
+Incident Triage Engine orchestrating log parsing, runbook retrieval, structured LLM
+analysis, and alert payload formatting.
 """
 
 import logging
@@ -75,10 +75,10 @@ class IncidentTriageEngine:
         self, raw_logs: str, max_context_lines: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Full 3-stage triage pipeline:
+        Full triage pipeline (ADR 0001 stages 1-4; stage 5 rendering is the API layer):
         1. Extract and filter high-signal log lines (compression).
         2. Retrieve matching runbooks and generate a structured IncidentReport.
-        3. Format notification routing payload (webhook / Slack dispatch).
+        3. Format the Slack alert payload for the report.
 
         max_context_lines is passed per call so concurrent requests cannot mutate
         shared engine state.
@@ -155,7 +155,11 @@ class IncidentTriageEngine:
         }
 
     def format_notification_payload(self, report: IncidentReport) -> Dict[str, Any]:
-        """Format an IncidentReport as an alert payload (Slack/PagerDuty)."""
+        """Format an IncidentReport as a Slack alert payload.
+
+        Slack is the only channel implemented; PagerDuty routing is planned with the
+        Week 8 webhook work and is not built here.
+        """
         color_map = {
             SeverityLevel.CRITICAL: "#FF0000",
             SeverityLevel.HIGH: "#FFA500",
