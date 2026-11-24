@@ -10,6 +10,7 @@ from src.db.repository import (
     delete_report,
     get_report,
     list_reports,
+    report_counts,
     save_report,
     storage_state,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "get_engine",
     "get_report",
     "list_reports",
+    "report_counts",
     "reset_engine",
     "save_report",
     "session_scope",

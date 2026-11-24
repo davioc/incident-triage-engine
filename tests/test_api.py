@@ -3,6 +3,7 @@ Integration tests for FastAPI REST endpoints using TestClient.
 """
 
 import os
+from typing import Any, Dict
 from unittest.mock import patch
 
 import pytest
@@ -489,3 +490,119 @@ def test_json_triage_reports_the_disabled_storage_reason(mock_engine):
         "stored": False,
         "reason": "DATABASE_URL is not set; report storage is disabled",
     }
+
+
+# --- Stored-report notice ------------------------------------------------------------
+
+
+def degraded_triage_result(incident_id: str) -> Dict[str, Any]:
+    result = stub_triage_result()
+    result["incident_report"]["incident_id"] = incident_id
+    result["metadata"]["degraded"] = "provider request failed; heuristic triage applied"
+    return result
+
+
+def test_summary_names_disabled_storage_without_failing():
+    """The notice has to answer, not fail: disabled storage is a state to display."""
+    response = client.get("/api/v1/reports/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["total"] == 0
+    assert "DATABASE_URL" in body["storage"]["reason"]
+    # The listing keeps 503, so 'not configured' stays distinct from 'nothing stored'.
+    assert client.get("/api/v1/reports").status_code == 503
+
+
+def test_summary_counts_rows_and_separates_degraded_ones(storage):
+    save_report(
+        {
+            "incident_report": {
+                **stub_triage_result()["incident_report"],
+                "incident_id": "INC-critical",
+                "severity": "CRITICAL",
+            },
+            "metadata": {"analysis_mode": "ollama", "model": "qwen2.5-coder"},
+        }
+    )
+    save_report(degraded_triage_result("INC-degraded"))
+
+    body = client.get("/api/v1/reports/summary").json()
+    assert body["enabled"] is True
+    assert body["total"] == 2
+    assert body["degraded"] == 1
+    # Newest first, matching the listing: the notice is a preview, not a digest.
+    assert [row["incident_id"] for row in body["reports"]] == [
+        "INC-degraded",
+        "INC-critical",
+    ]
+    assert body["reports"][1]["degraded"] is None
+
+    limited = client.get("/api/v1/reports/summary?limit=1").json()
+    assert len(limited["reports"]) == 1
+    assert limited["total"] == 2
+
+
+def test_summary_fragment_renders_the_notice(storage):
+    save_report(
+        {
+            "incident_report": {
+                **stub_triage_result()["incident_report"],
+                "incident_id": "INC-critical",
+                "severity": "CRITICAL",
+            },
+            "metadata": {"analysis_mode": "ollama", "model": "qwen2.5-coder"},
+        }
+    )
+    save_report(degraded_triage_result("INC-degraded"))
+
+    stored_id = client.get("/api/v1/reports").json()["reports"][0]["id"]
+    fragment = client.get("/api/v1/reports/summary", headers=DASHBOARD_HEADERS)
+    assert fragment.status_code == 200
+    assert 'id="storage-status"' in fragment.text
+    assert "2 stored" in fragment.text
+    assert "1 degraded" in fragment.text
+    assert "CRITICAL" in fragment.text
+    assert "qwen2.5-coder" in fragment.text
+    assert f'href="/api/v1/reports/{stored_id}"' in fragment.text
+
+
+def test_summary_fragment_names_disabled_storage():
+    fragment = client.get("/api/v1/reports/summary", headers=DASHBOARD_HEADERS)
+    assert fragment.status_code == 200
+    assert "No report history" in fragment.text
+    assert "DATABASE_URL" in fragment.text
+
+
+def test_summary_fragment_says_nothing_is_stored_yet(storage):
+    fragment = client.get("/api/v1/reports/summary", headers=DASHBOARD_HEADERS)
+    assert "0 stored" in fragment.text
+    assert "Nothing stored yet" in fragment.text
+
+
+def test_summary_reports_an_unreachable_database():
+    """Configured but unusable storage is a failure, so it does keep 503."""
+    original = settings.DATABASE_URL
+    settings.DATABASE_URL = UNREACHABLE_URL
+    reset_engine()
+    try:
+        response = client.get("/api/v1/reports/summary")
+        assert response.status_code == 503
+        assert "unreachable" in response.json()["detail"]
+    finally:
+        settings.DATABASE_URL = original
+        reset_engine()
+
+
+@patch("src.api.routes.engine")
+def test_triage_refreshes_the_notice_with_the_row_it_just_wrote(mock_engine, storage):
+    """The dashboard refreshes the notice after an analysis, so the new row appears."""
+    mock_engine.process_raw_logs.return_value = stub_triage_result()
+    before = client.get("/api/v1/reports/summary").json()["total"]
+
+    client.post("/api/v1/triage", json={"raw_logs": SAMPLE_LOGS})
+
+    after = client.get("/api/v1/reports/summary").json()
+    assert after["total"] == before + 1
+    assert after["degraded"] == 0
+    assert after["reports"][0]["incident_id"] == "INC-2026-TEST"
