@@ -2,76 +2,121 @@
 
 ## Decision
 
-Implement a modular, high-performance incident triage pipeline that ingests log streams, extracts anomalies, retrieves runbook context, performs AI-driven analysis, and renders real-time HTML fragments via HTMX.
+Implement a five-stage triage pipeline — extraction, parsing, retrieval, analysis,
+rendering — inside one FastAPI service, with HTMX rendering report fragments, rather than
+a single monolithic analyzer or a broker-connected mesh of services.
 
 ## Context
 
-Our current logging and alerting infrastructure lacks a unified analysis layer, making it difficult to correlate events, extract actionable insights, and present SREs with a clear, real-time view of system health. As observability requirements grow, we need an architecture that can scale ingestion, integrate with external LLMs, and deliver instant UI updates without page reloads.
+This project is a portfolio build exercised against realistic sample log bursts. No
+production logging or alerting stack is being replaced, and there is no SRE audience being
+served; the point is to prove a pipeline works and to prove it fails honestly. The
+constraints that actually shaped the architecture:
+
+* **Offline-first.** The pipeline must run with no API key, no model download and no
+  database service, so `pytest` and CI never depend on a provider being reachable.
+* **A report must never be invented.** Provider and network failures degrade to heuristic
+  analysis, labelled in `metadata.degraded`, with escalation suppressed. A schema
+  validation failure raises HTTP 502 and is never substituted with a heuristic report.
+* **One implementation, two consumers.** The dashboard and the API mount the same router,
+  so the UI cannot drift from the contract: `HX-Request` selects the HTML fragment, every
+  other client gets JSON.
+* **Backend chosen at runtime.** `mock`, local Ollama and OpenAI are switched inside the
+  running process rather than by editing `.env` and restarting, so backends can be compared
+  against the same log input.
+* **Retrieval is opt-in.** Runbooks ground the prompt when Chroma is configured, without
+  forcing an embedding store into the test suite or the CLI.
 
 ## Decision Drivers
 
-* **Scalability**: Ingest and analyze high-volume log streams in near real-time.
-* **Maintainability**: Modular pipeline stages (extraction, parsing, retrieval, analysis, rendering) for easier updates and debugging.
-* **Flexibility**: Support multiple analysis backends (mock, local Ollama, OpenAI) without changing the core flow.
+* **Offline-first development**: no keys, no downloads, no services required to run tests.
+* **Testability**: each stage is a pure function or service, so a stage can be stubbed
+  individually instead of the whole pipeline being mocked.
+* **Backend flexibility**: swapping mock / Ollama / OpenAI must not touch core flow.
+* **Alert trustworthiness**: a heuristic fallback has to look like a fallback. Suppressing
+  escalation on degraded output matters more than reporting more incidents.
+* **Modularity**: new log sources attach at extraction, new models attach at analysis.
 
 ## Alternatives Considered
 
-* **Monolithic Logging Analyzer**: A single service handling ingestion, parsing, and analysis. Simpler initially, but harder to scale independently and update without downtime.
-* **Event-Driven Microservices Mesh**: Multiple services (collector, parser, retriever, analyzer, notifier) communicating via a message broker. Higher complexity and operational overhead for our use case.
-* **Selected Approach**: A structured five-stage pipeline within a FastAPI-backed service, coupled with HTMX for client-side rendering.
+* **Monolithic Logging Analyzer**: one service handling ingestion, parsing and analysis.
+  Simpler to start, but a provider failure and a parse failure land in the same function,
+  which makes the degrade-versus-fail distinction hard to express and hard to test.
+* **Event-Driven Microservices Mesh**: collector, parser, retriever, analyzer and notifier
+  as separate services over a message broker. It matches a scaling narrative, but adds
+  operational overhead a single-operator service does not need and makes offline testing
+  impossible.
+* **Selected Approach**: a structured five-stage pipeline within one FastAPI service, with
+  HTMX for fragment-level rendering.
 
 ## Rationale
 
-The chosen pipeline architecture balances scalability and simplicity. By separating concerns into five distinct stages—Extraction, Parsing, Retrieval, Analysis, and Rendering—we gain:
+Separating the stages buys four things that the alternatives do not:
 
-* Independent scaling of ingestion vs. retrieval vs. analysis vs. UI.
-* Easy swapping of analysis backends (e.g., mock, Ollama, OpenAI) without touching core logic.
-* Grounded recommendations: retrieved runbook text constrains what the model may propose.
-* Tight coupling to HTMX for instant, fragment-based UI updates, ideal for SRE dashboards.
+* Each stage is stubbable in tests, so the suite stays offline and fast (81 tests, ~3s).
+* Analysis backends swap without touching parsing or retrieval.
+* Retrieved runbook text constrains what the model may propose, so recommendations are
+  grounded in the operator's own runbooks rather than model recall.
+* The report arrives as a fragment swap, so the dashboard updates without a page reload.
+
+Keeping it in one process is the deliberate half of the trade-off: ingestion, retrieval and
+analysis share one event loop, and independent scaling is not available today. Splitting the
+service is a later decision, not a current capability.
 
 ## Consequences
 
-* **Short-term**: Initial setup requires defining schemas, implementing pipeline stages, indexing runbooks, and wiring HTMX/Pydantic validation.
-* **Long-term**: A robust, extensible foundation for adding new log sources, analysis models, or real-time visualization widgets.
-* **Trade-off**: Retrieval is opt-in, so tests and the CLI stay offline and fast, but a retrieval failure must be reported rather than silently skipped.
+* **Short-term**: schemas defined, stages implemented, runbooks indexed, HTMX and Pydantic
+  validation wired.
+* **Long-term**: new log sources attach at stages 1–2 (GitHub/Jira webhook ingestion is
+  planned as Week 8), new analysis models attach at stage 4.
+* **Trade-off**: retrieval is opt-in, so tests and the CLI stay offline and fast, but a
+  retrieval failure is reported in `metadata.runbook_warning` rather than skipped silently.
+* **Trade-off**: one process limits throughput; the mitigation is bounded input
+  (`max_context_lines`) rather than horizontal scaling.
 
 ## Implementation
 
-The pipeline is implemented as follows:
-
-1. **Stage 1: Extraction**
-   - FastAPI router with a Pydantic-validated JSON payload (`raw_logs`, `max_context_lines`).
-   - Accepts raw log payloads via `POST /api/v1/triage`.
-
-2. **Stage 2: Parsing Engine**
-   - Pre-compiled RegEx and ISO-8601 timestamp extractor.
-   - Normalizes log formats for downstream analysis; lines that do not parse are counted in `metadata.unparseable_lines`.
-
-3. **Stage 3: Runbook Retrieval**
-   - ChromaDB similarity search over `docs/runbooks/*.md`, enabled with `engine(use_runbooks=True)`.
-   - Matched runbook blocks are passed to the prompt; retrieval failures are recorded in `metadata.runbook_warning`.
-
-4. **Stage 4: LLM Analysis**
-   - Routes on `TRIAGE_MODE`: `mock` (heuristic, no network), `ollama` (local Llama 3.2), `openai` (GPT-4o tool calling).
-   - Output is constrained to the `IncidentReport` schema through tool calling.
-
-5. **Stage 5: Response and Alerting**
-   - Pydantic validation, Slack/PagerDuty payload formatting, and HTMX fragment rendering for `HX-Request` clients.
-   - Provider failures degrade to heuristic analysis, labelled and without escalation; schema failures return HTTP 502.
+1. **Stage 1: Extraction** — FastAPI router with a Pydantic-validated payload
+   (`raw_logs`, `max_context_lines`) on `POST /api/v1/triage`. Webhook sources are planned,
+   not implemented.
+2. **Stage 2: Parsing Engine** — pre-compiled RegEx and ISO-8601 timestamp extraction.
+   Normalises log formats for downstream analysis; lines that do not parse are counted in
+   `metadata.unparseable_lines` instead of being dropped quietly.
+3. **Stage 3: Runbook Retrieval** — ChromaDB similarity search over `docs/runbooks/*.md`,
+   enabled with `engine(use_runbooks=True)`. Matched blocks are passed to the prompt;
+   retrieval failures land in `metadata.runbook_warning`.
+4. **Stage 4: LLM Analysis** — routes on `TRIAGE_MODE`: `mock` (heuristics, no network),
+   `ollama` (local Llama 3.2), `openai` (tool calling). Output is constrained to the
+   `IncidentReport` schema, but by different means per backend: OpenAI uses tool calling,
+   while Ollama sends `response_format={"type": "json_schema", "strict": True}` because
+   local models write tool calls as plain text. Switching to an Ollama model probes
+   `/v1/models` and names a missing model on the control, so a configuration mistake is not
+   reported as an outage.
+5. **Stage 5: Response and Alerting** — Pydantic validation, a Slack channel payload, and
+   an HTMX fragment for `HX-Request` clients. Provider failures degrade to labelled
+   heuristics without escalation; schema failures return HTTP 502. PagerDuty routing is not
+   implemented.
 
 Each stage is a pure function or service, enabling unit testing and mock injection.
 
 ## Monitoring and Feedback
 
-* Track ingestion rate, parsing success rate, analysis latency, and error counts via FastAPI middleware.
-* Log structured events (JSON) for each stage to correlate issues across the pipeline.
-* Gather SRE feedback through the dashboard UI to refine anomaly detection rules and analysis prompts.
+Currently in place:
+
+* `/api/v1/health` reports service version and storage state (enabled or disabled, backend,
+  masked URL), so a disabled store is distinguishable from an unreachable one.
+* `logger` warnings for degraded analysis, storage failures, retrieval warnings and schema
+  failures, naming the backend and endpoint involved.
+* The rendered report carries its provenance: the backend and model that produced it, and
+  whether it was stored or why it was not.
+* CI reports a coverage table per Python version without gating on the number.
+
+Planned, not implemented: `/ready`, structured JSON logs per stage, and request tracing
+(Week 11). The feedback loop is the project author reading the dashboard's provenance and
+degraded notes, not a team's incident review.
 
 ## Review
 
-This architecture decision record will be reviewed:
-
-* Quarterly, or whenever a major pipeline change is proposed.
-* When introducing new log formats, analysis models, or UI components.
-
-The implementation plan will be updated as required to keep pace with evolving requirements and technologies.
+This record is revised when a pipeline stage changes, when a backend contract changes, or
+when a claim in it stops matching the code — not on a fixed calendar. A claim that no longer
+holds is corrected or removed rather than left as aspiration.
