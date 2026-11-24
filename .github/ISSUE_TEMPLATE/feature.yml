@@ -1,0 +1,33 @@
+name: Feature request
+description: A change worth planning, or a gap in the build plan.
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: What you want and why
+      description: >-
+        Describe the change and the problem it solves. One paragraph is enough; skip a
+        proposal for how to implement it unless the approach is the point.
+    validations:
+      required: true
+  - type: textarea
+    id: pipeline-fit
+    attributes:
+      label: Where it fits in the pipeline
+      description: >-
+        Name the stage it touches - extraction, parsing, retrieval, analysis, rendering - and
+        say whether it changes the report schema or a UI surface. A UI or failure-policy change
+        has to update the design contract in the same commit.
+    validations:
+      required: true
+  - type: textarea
+    id: testing
+    attributes:
+      label: How it would be tested
+      description: >-
+        The suite runs offline: no API keys, no model download, no database service. Say how the
+        new behaviour would be covered without a live provider, and whether it needs a migration.
+    validations:
+      required: true

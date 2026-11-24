@@ -1,0 +1,48 @@
+name: Bug report
+description: Something does not behave as documented.
+labels:
+  - bug
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: >-
+        Describe what you saw, then what the code was meant to do. Plain prose is fine;
+        paste the response when a request returned something surprising.
+      placeholder: >-
+        Requested X and got Y. The code should have done Z because ...
+    validations:
+      required: true
+  - type: textarea
+    id: which-server
+    attributes:
+      label: Which server answered
+      description: >-
+        Say whether the Compose stack or a uvicorn process started from the repository served
+        the request. They read different configuration, and both can hold port 8000.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard surface
+        - API endpoints
+        - Report storage
+        - Analysis backend
+        - Container and deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: right-behaviour
+    attributes:
+      label: What would make it right
+      description: >-
+        State the behaviour you expect. If a merged commit already fixed this, name the commit
+        so the report stays findable without reading through commit messages.
+    validations:
+      required: true
