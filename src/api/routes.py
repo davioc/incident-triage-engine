@@ -113,7 +113,7 @@ def persist_report(results: Dict[str, Any], raw_logs: str) -> Dict[str, Any]:
     failure named in metadata.storage instead of the request turning into a 500.
     """
     if not storage_enabled():
-        return {"enabled": False, "stored": False}
+        return {"enabled": False, "stored": False, "reason": storage_state()["reason"]}
 
     try:
         report_id = save_report(results, raw_log=raw_logs)
@@ -681,13 +681,37 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
             f"{_esc(degraded_reason)}. Treat the actions above as heuristic, not LLM-derived.</p>"
         )
 
-    analysis_note = ""
+    # One provenance line: which backend produced this, and whether it was saved. A
+    # report that was *not* saved has to say why, so a reader never has to guess whether
+    # storage is off, unreachable, or simply not part of this build.
+    provenance_note = ""
     analysis_mode = meta.get("analysis_mode")
+    provenance = ""
     if analysis_mode:
-        model_suffix = f" · {meta.get('model')}" if meta.get("model") else ""
-        analysis_note = (
-            '<p class="text-[10px] text-slate-500 font-mono mt-1">'
-            f"Analysis: {_esc(analysis_mode)}{_esc(model_suffix)}</p>"
+        model_suffix = f" · {_esc(meta['model'])}" if meta.get("model") else ""
+        provenance = f"Analysis: {_esc(analysis_mode)}{model_suffix}"
+
+    storage = meta.get("storage")
+    if storage:
+        if storage.get("stored"):
+            report_id = _esc(storage.get("report_id"))
+            provenance += (
+                ' · Stored <a class="text-sky-400 underline decoration-slate-600 '
+                f'href="/api/v1/reports/{report_id}" target="_blank">{report_id}</a>'
+            )
+        else:
+            reason = (
+                storage.get("error")
+                or storage.get("reason")
+                or storage_state().get("reason", "report storage is unavailable")
+            )
+            provenance += (
+                f' · <span class="text-amber-400">Not stored: {_esc(reason)}</span>'
+            )
+
+    if provenance:
+        provenance_note = (
+            '<p class="text-[10px] text-slate-500 font-mono mt-1">' f"{provenance}</p>"
         )
 
     return f"""
@@ -704,7 +728,7 @@ def render_triage_html(report: Union[Dict[str, Any], IncidentReport]) -> str:
 
         <p class="text-sm text-slate-200">{summary}</p>
         {degraded_note}
-        {analysis_note}
+        {provenance_note}
 
         <div class="grid grid-cols-2 gap-4 text-xs py-2 border-y border-slate-700/50">
             <div>
