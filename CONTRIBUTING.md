@@ -59,8 +59,13 @@ UI is process-local, so `--reload` resets it to the `.env` default.
 ## Commits, issues and pull requests
 
 Commits are conventional: a subject under 72 characters and a body that explains why the change
-was needed, not what lines moved. PR descriptions are plain prose — what changed, what it costs,
-what you ran. Skip comparison tables and editorial sections.
+was needed, not what lines moved. A pull request description uses level-3 headers (`###`) in one
+order — `### Summary`, `### Changes`, `### Testing`, `### Notes` — because a level-1 header renders
+large in the PR view, and every line under the last three is a bullet that opens with a bold label
+naming the surface, like `- **Dashboard UI:** ...`. Identifiers, routes and file paths go in
+backticks; a label a person reads in the interface is italic, never both. `### Summary` is one
+paragraph of plain prose, `### Testing` names the commands you ran and what they returned, and the
+final line closes the issue (`Closes #12`). Skip comparison tables and editorial sections.
 
 Keep credentials, tokens and machine-specific measurements out of public issues, PR bodies and
 docs. Benchmark numbers are machine-specific; re-measure before quoting them anywhere.
