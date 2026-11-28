@@ -83,6 +83,15 @@ The counts come from `report_counts()` in the repository, which reads two counts
 of pulling every stored payload. The recent rows come from `list_reports()` with a small
 limit, newest first, so the notice is a preview and not a summary of the whole table.
 
+## The sample burst
+
+The *Load Sample Error Burst* button writes lines the parser accepts, one string per line
+joined afterwards. `parse_log_line` anchors at the start of the line and
+`process_raw_logs` strips only the whole string, so a sample written as an indented
+template literal reaches the textarea with leading spaces and every line but the first is
+counted in `metadata.unparseable_lines`. `tests/test_dashboard.py` parses the lines the
+button loads, so the example cannot drift away from the pinned format unnoticed.
+
 ## Rules for changing this surface
 
 - Anything rendered from report content is escaped (`_esc` in `src/api/routes.py`).
