@@ -51,4 +51,9 @@ async def serve_dashboard():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("src.main.app", host="127.0.0.1", port=8000, reload=True)
+    # 8001 by default: the Compose stack owns 8000, and Docker relays loopback there,
+    # so a dev server on the same port would answer some requests and the container
+    # others. Override with TRIAGE_PORT, or pass --port when starting uvicorn directly.
+    uvicorn.run(
+        "src.main.app", host="127.0.0.1", port=settings.TRIAGE_PORT, reload=True
+    )

@@ -39,9 +39,11 @@ ignores where a long template or prompt line is clearer than a wrapped one.
     docker compose build app
     docker compose up -d app
 
-Two processes can hold port 8000 on a dev machine, and they read different configuration: the
-Compose stack answers on `http://[::1]:8000`, a host `uvicorn` holds `http://127.0.0.1:8000`.
-Establish which one replied before changing code (issue #10). A backend switch made through the
+The Compose stack owns port 8000, and Docker relays loopback requests there, so the development
+server listens on 8001 instead (`Settings.TRIAGE_PORT`, and `--port 8001` in the documented
+commands). The two read different configuration: the container gets its Compose environment, a
+host server reads the project `.env`. When you are unsure which one answered,
+`/api/v1/health` reports `server.hostname` and `server.pid`. A backend switch made through the
 UI is process-local, so `--reload` resets it to the `.env` default.
 
 ## Documents

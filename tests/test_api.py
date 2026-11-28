@@ -3,6 +3,7 @@ Integration tests for FastAPI REST endpoints using TestClient.
 """
 
 import os
+import socket
 from typing import Any, Dict
 from unittest.mock import patch
 
@@ -21,6 +22,21 @@ def test_health_check_endpoint():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
+
+
+def test_health_names_the_process_that_answered():
+    # A dev machine can run the container and a host server at the same time, so the
+    # response has to say who produced it. Hostname and pid are the identifiers; the
+    # address records what the caller addressed the request to.
+    server = client.get("/api/v1/health").json()["server"]
+    assert server["hostname"] == socket.gethostname()
+    assert server["pid"] == os.getpid()
+    assert server["address"]
+
+
+def test_health_records_the_address_the_request_was_sent_to():
+    response = client.get("/api/v1/health", headers={"Host": "127.0.0.1:8001"})
+    assert response.json()["server"]["address"] == "127.0.0.1:8001"
 
 
 @patch("src.api.routes.engine")

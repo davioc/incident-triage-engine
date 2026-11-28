@@ -164,17 +164,19 @@ Coverage tooling lives in `requirements-dev.txt` so the runtime image installs
 
 ### 4. Run the API and dashboard
 
-Start the development server:
+Start the development server on **8001**. The Compose stack publishes 8000 and Docker relays
+loopback requests there, so a dev server that also claims 8000 would answer some of them and
+the container others:
 
 ```bash
-python -m uvicorn src.main:app --reload
+python -m uvicorn src.main:app --reload --port 8001
 ```
 
-Then open <http://127.0.0.1:8000> in a browser. The application provides:
+Then open <http://127.0.0.1:8001> in a browser. The application provides:
 
-- Dashboard: <http://127.0.0.1:8000>
-- Health check: <http://127.0.0.1:8000/api/v1/health>
-- Interactive API documentation: <http://127.0.0.1:8000/docs>
+- Dashboard: <http://127.0.0.1:8001>
+- Health check: <http://127.0.0.1:8001/api/v1/health>
+- Interactive API documentation: <http://127.0.0.1:8001/docs>
 - Triage endpoint: `POST /api/v1/triage`
 - Analysis backend: `GET /api/v1/mode` (current backend) and `POST /api/v1/mode?mode=...`
   (switch it for this process — see "Switching the backend at runtime")
@@ -207,7 +209,7 @@ from the **404** an unknown report id gets. Set a URL to enable it:
 ```powershell
 $env:DATABASE_URL = "postgresql+psycopg://triage:triage@localhost:5432/triage"
 python -m alembic upgrade head    # the app never migrates itself outside the container
-python -m uvicorn src.main:app
+python -m uvicorn src.main:app --port 8001
 ```
 
 Every triage then writes a row, and the response says whether it landed:
@@ -277,10 +279,13 @@ The dashboard's **Serving** button (left of *Analyze & Triage Payload*) toggles 
 the server. The same control is an ordinary API endpoint:
 
 ```bash
-curl "http://127.0.0.1:8000/api/v1/mode"                      # what is active now
-curl -X POST "http://127.0.0.1:8000/api/v1/mode?mode=ollama&model=llama3.2"
-curl -X POST "http://127.0.0.1:8000/api/v1/mode?mode=mock"
+curl "http://127.0.0.1:8001/api/v1/mode"                      # what is active now
+curl -X POST "http://127.0.0.1:8001/api/v1/mode?mode=ollama&model=llama3.2"
+curl -X POST "http://127.0.0.1:8001/api/v1/mode?mode=mock"
 ```
+
+Against the Compose stack the same endpoints are on `http://localhost:8000`, and a switch
+there changes the container's process, not your dev server's.
 
 The switch rebuilds the analyzer inside the running process only; `.env` stays the
 default, and `OLLAMA_MODEL` / `OPENAI_MODEL` still supply the model when you omit
@@ -309,7 +314,8 @@ Then open <http://localhost:8000>. The image is built from `Dockerfile` and:
   inside the image;
 - applies Alembic migrations before serving when `DATABASE_URL` is set, and stops the
   container if a migration fails rather than storing reports in a mismatched schema;
-- runs as a non-root user and reports readiness through `/api/v1/health`.
+- runs as a non-root user and reports readiness through `/api/v1/health`, whose `server`
+  block names the answering process (hostname `incident-triage-engine-app`, pid, address).
 
 The stack also starts `postgres:16-alpine`, and the app points at it by default with
 `DATABASE_URL=postgresql+psycopg://triage:triage@postgres:5432/triage`, so report storage
@@ -343,14 +349,17 @@ Changing an environment variable only takes effect when the container is recreat
 inside the container network (declared as `host-gateway`, which also works on plain Docker Engine
 on Linux), so your pulled models are visible without publishing a port.
 
-The published stack and a local dev server both want port 8000. Docker relays loopback requests
-to the container, so `http://localhost:8000` reaches the container even while `uvicorn` is
-listening on the host, and the container carries its own environment (Postgres from the stack,
-no Ollama unless the profile is started). To test a host server while the stack is up, use a
-different port:
+Port 8000 belongs to the published stack. Docker relays loopback requests to the container, so
+`http://localhost:8000` reaches it even while something else is running on the host, and the
+container carries its own environment (Postgres from the stack, no Ollama unless the profile is
+started). The development server therefore listens on 8001: `src/main.py` uses
+`Settings.TRIAGE_PORT` as its default and every command above passes `--port 8001` explicitly.
 
-```powershell
-python -m uvicorn src.main:app --port 8001
+If two servers are running and you are not sure which one answered a request, ask it:
+
+```bash
+curl "http://localhost:8000/api/v1/health"   # server.hostname is the container name
+curl "http://127.0.0.1:8001/api/v1/health"   # server.hostname is your machine, plus its pid
 ```
 
 The `ollama` service is defined behind a `llm` profile so the default stack stays small. Its

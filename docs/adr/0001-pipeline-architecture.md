@@ -103,8 +103,10 @@ Each stage is a pure function or service, enabling unit testing and mock injecti
 
 Currently in place:
 
-* `/api/v1/health` reports service version and storage state (enabled or disabled, backend,
-  masked URL), so a disabled store is distinguishable from an unreachable one.
+* `/api/v1/health` reports service version, storage state (enabled or disabled, backend,
+  masked URL) and the answering process (`server.hostname`, `server.pid`, the address the
+  request was sent to), so a disabled store is distinguishable from an unreachable one and a
+  container answer is distinguishable from a host dev-server answer.
 * `logger` warnings for degraded analysis, storage failures, retrieval warnings and schema
   failures, naming the backend and endpoint involved.
 * The rendered report carries its provenance: the backend and model that produced it, and

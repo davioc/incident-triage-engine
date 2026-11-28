@@ -8,6 +8,7 @@ implementation of each endpoint.
 import html
 import logging
 import os
+import socket
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
@@ -329,17 +330,30 @@ async def set_analysis_mode(
 
 
 @router.get("/api/v1/health", status_code=status.HTTP_200_OK)
-async def health_check() -> Dict[str, Any]:
+async def health_check(request: Request) -> Dict[str, Any]:
     """
     Health check endpoint for monitoring API and service availability. Reports the
     storage configuration too, so an operator can tell disabled storage apart from a
     database that is configured but unreachable.
+
+    It also names the process that answered. A dev machine can hold port 8000 twice —
+    the Compose relay and a host `uvicorn` — and the two read different configuration,
+    so a bare status alone leaves "which server replied?" unanswered. The hostname is
+    the container name inside the stack and the machine name otherwise, and the pid is
+    unique per process, so the pair identifies the server without exposing credentials.
     """
     return {
         "status": "healthy",
         "service": "incident-triage-engine",
         "version": settings.VERSION,
         "storage": storage_state(),
+        "server": {
+            "hostname": socket.gethostname(),
+            "pid": os.getpid(),
+            # The address the client addressed this request to, echoed back so a
+            # request sent to `localhost:8000` shows which address it landed on.
+            "address": request.headers.get("host", ""),
+        },
     }
 
 
