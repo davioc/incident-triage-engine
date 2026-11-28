@@ -120,19 +120,12 @@
 
     </main>
 
-    <!-- Helper JS for loading sample telemetry logs 
-        Format:
-        "timestamp": "2026-09-01 12:00:00",
-        "level": "INFO",
-        "status": 200,
-        "latency_ms": 45,
-        "message": "GET /api/v1/health" 
-
-            `timestamp="2026-09-22T21:14:02.102Z" level="[ERROR]" status=500 latency=482ms msg="Database Connection Timeout on pool acquisition"`;
-            2026-09-22T21:14:02.115Z [ERROR] status=503 latency=120ms msg="Redis cluster unreachable host=10.0.4.12"
-            2026-09-22T21:14:02.150Z [WARN]  status=429 latency=15ms  msg="Rate limiter triggered user_id=89231"
-            2026-09-22T21:14:02.210Z [ERROR] status=500 latency=850ms msg="Failed to render template user_dashboard"
-            2026-09-22T21:14:02.301Z [INFO]  status=200 latency=42ms  msg="GET /api/v1/health operational"
+    <!-- Helper JS for loading sample telemetry logs.
+        parse_log_line accepts two shapes: the pinned line
+        "2026-09-01 12:00:00 [INFO] 200 45ms - GET /api/v1/health" and the key-value
+        variant `2026-09-22T21:14:02.102Z [ERROR] status=500 latency=482ms msg="..."`.
+        The pattern is anchored at the start of the line, so a sample line that arrives
+        with leading spaces is counted as unparseable rather than trimmed.
     -->
     <script>
         function toggleModeMenu() {
@@ -202,13 +195,17 @@
         }
 
         function loadSampleLogs() {
-            const sampleLogs = 
-           `2026-09-22T21:14:02.102Z [ERROR] status=500 latency=482ms msg="Database Connection Timeout on pool acquisition"
-            2026-09-22T21:14:02.115Z [ERROR] status=503 latency=120ms msg="Redis cluster unreachable host=10.0.4.12"
-            2026-09-22T21:14:02.150Z [WARN]  status=429 latency=15ms  msg="Rate limiter triggered user_id=89231"
-            2026-09-22T21:14:02.210Z [ERROR] status=500 latency=850ms msg="Failed to render template user_dashboard"
-            2026-09-22T21:14:02.301Z [INFO]  status=200 latency=42ms  msg="GET /api/v1/health operational"`
-            
+            // One string per line, joined afterwards. A template literal indented to line
+            // up with the source would hand the textarea leading spaces, and the parser
+            // anchors at the start of the line: only the first line ever parsed.
+            const sampleLogs = [
+                '2026-09-22T21:14:02.102Z [ERROR] status=500 latency=482ms msg="Database Connection Timeout on pool acquisition"',
+                '2026-09-22T21:14:02.115Z [ERROR] status=503 latency=120ms msg="Redis cluster unreachable host=10.0.4.12"',
+                '2026-09-22T21:14:02.150Z [WARN]  status=429 latency=15ms  msg="Rate limiter triggered user_id=89231"',
+                '2026-09-22T21:14:02.210Z [ERROR] status=500 latency=850ms msg="Failed to render template user_dashboard"',
+                '2026-09-22T21:14:02.301Z [INFO]  status=200 latency=42ms  msg="GET /api/v1/health operational"',
+            ].join('\n');
+
             document.getElementById('raw_logs').value = sampleLogs;
         }
     </script>
