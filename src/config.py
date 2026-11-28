@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # database keep working offline. See docs/adr/0002-database-selection.md.
     DATABASE_URL: str = ""
 
+    # The development server listens on 8001 so a host uvicorn never competes with the
+    # Compose stack, which keeps 8000. The container starts uvicorn with its own
+    # --port 8000, so this default only applies to local runs.
+    TRIAGE_PORT: int = 8001
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

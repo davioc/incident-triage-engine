@@ -10,6 +10,9 @@ services:
   app:
     build: .
     image: incident-triage-engine
+    # A stable hostname so /api/v1/health reads as this service instead of a container
+    # id, which is how you tell the stack apart from a host dev server (issue #10).
+    hostname: incident-triage-engine-app
     ports:
       - "8000:8000"
     environment:

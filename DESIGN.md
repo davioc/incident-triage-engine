@@ -53,6 +53,13 @@ plain words rather than pretending there is an empty database.
 Storage URLs in responses have the password removed. The health endpoint reports the
 backend, the masked URL, and the table name; it never echoes credentials.
 
+The same endpoint names the process that answered: `server.hostname`, `server.pid`, and
+the address the request was addressed to. Two servers can run from this repository at once
+— the Compose container and a host dev server — and they read different configuration, so
+a response that looks wrong may simply have come from the other one. The published stack
+keeps port 8000; the dev server listens on 8001 (`Settings.TRIAGE_PORT`) so they never
+compete for the same address.
+
 ## Backend switching
 
 `GET /api/v1/mode` reports the backend this process is using. `POST /api/v1/mode`
